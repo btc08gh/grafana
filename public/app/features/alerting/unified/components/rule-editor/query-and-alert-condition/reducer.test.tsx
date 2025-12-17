@@ -9,6 +9,8 @@ import {
 import { defaultCondition } from 'app/features/expressions/utils/expressionTypes';
 import { AlertQuery } from 'app/types/unified-alerting-dto';
 
+import { mockDataQuery, mockReduceExpression, mockThresholdExpression } from '../../../mocks';
+
 import {
   QueriesAndExpressionsState,
   addNewDataQuery,
@@ -452,5 +454,74 @@ describe('Query and expressions reducer', () => {
       optimizeReduceExpression({ updatedQueries: [alertQuery], expressionQueries: [thresholdExpression] })
     );
     expect(newState).toMatchSnapshot();
+  });
+
+  describe('dangling reference handling', () => {
+    it('should clear expression reference when removing a data query that is referenced by a reduce expression', () => {
+      const dataQuery = mockDataQuery({ refId: 'A' });
+      const reduceExpr = mockReduceExpression({ refId: 'B', expression: 'A' });
+
+      const initialState: QueriesAndExpressionsState = {
+        queries: [dataQuery, reduceExpr],
+      };
+
+      // Remove the data query A
+      const newState = queriesAndExpressionsReducer(initialState, removeExpression('A'));
+
+      // The reduce expression should still exist but its reference should be cleared
+      expect(newState.queries).toHaveLength(1);
+      expect(newState.queries[0].refId).toBe('B');
+      expect(newState.queries[0].model.expression).toBeNull();
+    });
+
+    it('should clear expression reference when removing a data query via setDataQueries', () => {
+      const dataQuery = mockDataQuery({ refId: 'A' });
+      const mathExpr: AlertQuery<ExpressionQuery> = {
+        refId: 'C',
+        queryType: 'expression',
+        datasourceUid: ExpressionDatasourceUID,
+        model: {
+          refId: 'C',
+          type: ExpressionQueryType.math,
+          expression: '$A + 10', // references data query A
+          datasource: {
+            type: '__expr__',
+            uid: '__expr__',
+          },
+        },
+      };
+
+      const initialState: QueriesAndExpressionsState = {
+        queries: [dataQuery, mathExpr],
+      };
+
+      // Remove all data queries (simulating user deleting query A)
+      const newState = queriesAndExpressionsReducer(initialState, setDataQueries([]));
+
+      // The math expression should still exist but reference to A should be cleared
+      expect(newState.queries).toHaveLength(1);
+      expect(newState.queries[0].refId).toBe('C');
+      // Math expressions with dangling refs should have them removed from the expression string
+      expect(newState.queries[0].model.expression).not.toContain('$A');
+    });
+
+    it('should clear expression reference when removing an expression that is referenced by another expression', () => {
+      const dataQuery = mockDataQuery({ refId: 'A' });
+      const reduceExpr = mockReduceExpression({ refId: 'B', expression: 'A' });
+      const thresholdExpr = mockThresholdExpression({ refId: 'C', expression: 'B' });
+
+      const initialState: QueriesAndExpressionsState = {
+        queries: [dataQuery, reduceExpr, thresholdExpr],
+      };
+
+      // Remove expression B which is referenced by C
+      const newState = queriesAndExpressionsReducer(initialState, removeExpression('B'));
+
+      // Both A and C should remain, but C's reference to B should be cleared
+      expect(newState.queries).toHaveLength(2);
+      expect(newState.queries.map((q) => q.refId)).toEqual(['A', 'C']);
+      const thresholdQuery = newState.queries.find((q) => q.refId === 'C');
+      expect(thresholdQuery?.model.expression).toBeNull();
+    });
   });
 });

@@ -75,6 +75,70 @@ export function queriesWithUpdatedReferences(
   });
 }
 
+export function queriesWithRemovedReferences(queries: AlertQuery[], removedRefId: string): AlertQuery[] {
+  return queries.map((query) => {
+    if (!isExpressionQuery(query.model)) {
+      return query;
+    }
+
+    const isMathExpression = query.model.type === 'math';
+    const isReduceExpression = query.model.type === 'reduce';
+    const isResampleExpression = query.model.type === 'resample';
+    const isClassicExpression = query.model.type === 'classic_conditions';
+    const isThresholdExpression = query.model.type === 'threshold';
+    const isSqlExpression = query.model.type === 'sql';
+
+    if (isMathExpression) {
+      const updatedExpression = removeMathExpressionRef(query.model.expression ?? '', removedRefId);
+      return {
+        ...query,
+        model: {
+          ...query.model,
+          expression: updatedExpression || undefined,
+        },
+      };
+    }
+
+    if (isResampleExpression || isReduceExpression || isThresholdExpression) {
+      const isReferencing = query.model.expression === removedRefId;
+      return {
+        ...query,
+        model: {
+          ...query.model,
+          // Set to null so Select component shows no selection
+          expression: isReferencing ? null : query.model.expression,
+        },
+      };
+    }
+
+    if (isSqlExpression) {
+      // SQL expressions reference table names, not query refIds in the same way
+      // For now, we'll leave SQL expressions unchanged as they work differently
+      return query;
+    }
+
+    if (isClassicExpression) {
+      const conditions = query.model.conditions?.map((condition) => ({
+        ...condition,
+        query: {
+          ...condition.query,
+          params: condition.query.params.filter((param: string) => param !== removedRefId),
+        },
+      }));
+
+      return { ...query, model: { ...query.model, conditions } };
+    }
+
+    return query;
+  });
+}
+
+export function removeMathExpressionRef(expression: string, refIdToRemove: string): string {
+  // Remove both $refId and ${refId} patterns
+  const refPattern = new RegExp('(\\$' + refIdToRemove + '\\b)|(\\${' + refIdToRemove + '})', 'gm');
+  return expression.replace(refPattern, '').trim();
+}
+
 export function updateMathExpressionRefs(expression: string, previousRefId: string, newRefId: string): string {
   const oldExpression = new RegExp('(\\$' + previousRefId + '\\b)|(\\${' + previousRefId + '})', 'gm');
   const newExpression = '${' + newRefId + '}';

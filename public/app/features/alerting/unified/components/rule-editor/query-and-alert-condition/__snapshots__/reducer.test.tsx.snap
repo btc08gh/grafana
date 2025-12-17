@@ -316,9 +316,7 @@ exports[`Query and expressions reducer should set data queries 1`] = `
               "type": "and",
             },
             "query": {
-              "params": [
-                "A",
-              ],
+              "params": [],
             },
             "reducer": {
               "params": [],

@@ -7,7 +7,9 @@ import {
   containsPathSeparator,
   findRenamedDataQueryReferences,
   getThresholdsForQueries,
+  queriesWithRemovedReferences,
   queriesWithUpdatedReferences,
+  removeMathExpressionRef,
   updateMathExpressionRefs,
 } from './util';
 
@@ -226,6 +228,80 @@ describe('rule-editor', () => {
     });
     it('should not rewire refs with partial variable match', () => {
       expect(updateMathExpressionRefs('$A3 + $B', 'A', 'C')).toBe('$A3 + $B');
+    });
+  });
+
+  describe('queriesWithRemovedReferences', () => {
+    it('should clear reference in reduce expression when data query is removed', () => {
+      const queries: AlertQuery[] = [dataSource, reduceExpression];
+      const updatedQueries = queriesWithRemovedReferences(queries, 'A');
+
+      expect(updatedQueries[0]).toEqual(dataSource);
+      expect(updatedQueries[1].model.expression).toBeNull();
+    });
+
+    it('should clear reference in threshold expression when expression is removed', () => {
+      const queries: AlertQuery[] = [dataSource, reduceExpression, thresholdExpression];
+      const updatedQueries = queriesWithRemovedReferences(queries, 'B');
+
+      expect(updatedQueries[0]).toEqual(dataSource);
+      expect(updatedQueries[1]).toEqual(reduceExpression);
+      expect(updatedQueries[2].model.expression).toBeNull();
+    });
+
+    it('should remove reference from math expression', () => {
+      const queries: AlertQuery[] = [dataSource, mathExpression];
+      const updatedQueries = queriesWithRemovedReferences(queries, 'A');
+
+      const mathModel = updatedQueries[1].model as ExpressionQuery;
+      expect(mathModel.expression).not.toContain('$A');
+      expect(mathModel.expression).not.toContain('${A}');
+    });
+
+    it('should remove refId from classic condition params', () => {
+      const queries: AlertQuery[] = [dataSource, classicCondition];
+      const updatedQueries = queriesWithRemovedReferences(queries, 'A');
+
+      const classicModel = updatedQueries[1].model as ExpressionQuery;
+      expect(classicModel.conditions?.[0].query.params).toEqual([]);
+    });
+
+    it('should not modify queries that do not reference the removed refId', () => {
+      const dataSource2 = { ...dataSource, refId: 'B' };
+      const reduceB = { ...reduceExpression, refId: 'C', model: { ...reduceExpression.model, expression: 'B' } };
+      const queries: AlertQuery[] = [dataSource, dataSource2, reduceB];
+
+      const updatedQueries = queriesWithRemovedReferences(queries, 'A');
+
+      expect(updatedQueries[0]).toEqual(dataSource);
+      expect(updatedQueries[1]).toEqual(dataSource2);
+      expect(updatedQueries[2]).toEqual(reduceB);
+    });
+
+    it('should handle resample expressions', () => {
+      const queries: AlertQuery[] = [dataSource, resampleExpression];
+      const updatedQueries = queriesWithRemovedReferences(queries, 'A');
+
+      expect(updatedQueries[1].model.expression).toBeNull();
+    });
+  });
+
+  describe('removeMathExpressionRef', () => {
+    it('should remove $A pattern', () => {
+      expect(removeMathExpressionRef('$A + 10', 'A')).toBe('+ 10');
+    });
+
+    it('should remove ${A} pattern', () => {
+      expect(removeMathExpressionRef('${A} + 10', 'A')).toBe('+ 10');
+    });
+
+    it('should remove multiple references', () => {
+      const result = removeMathExpressionRef('$A + $A * 2', 'A');
+      expect(result.replace(/\s+/g, ' ').trim()).toBe('+ * 2');
+    });
+
+    it('should not remove partial matches', () => {
+      expect(removeMathExpressionRef('$ABC + 10', 'A')).toBe('$ABC + 10');
     });
   });
 });

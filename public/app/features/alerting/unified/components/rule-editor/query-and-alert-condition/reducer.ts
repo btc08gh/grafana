@@ -23,7 +23,7 @@ import { logError } from '../../../Analytics';
 import { getDefaultOrFirstCompatibleDataSource } from '../../../utils/datasource';
 import { getDefaultQueries, getInstantFromDataQuery } from '../../../utils/rule-form';
 import { createDagFromQueries, getOriginOfRefId } from '../dag';
-import { queriesWithUpdatedReferences, refIdExists } from '../util';
+import { queriesWithRemovedReferences, queriesWithUpdatedReferences, refIdExists } from '../util';
 
 // this one will be used as the refID when we create a new reducer for the threshold expression
 export const NEW_REDUCER_REF = 'reducer';
@@ -101,7 +101,17 @@ export const queriesAndExpressionsReducer = createReducer(initialState, (builder
       });
     })
     .addCase(setDataQueries, (state, { payload }) => {
-      const expressionQueries = state.queries.filter((query) => isExpressionQuery(query.model));
+      const previousDataQueries = state.queries.filter((query) => !isExpressionQuery(query.model));
+      const removedRefIds = previousDataQueries
+        .filter((q) => !payload.some((p) => p.refId === q.refId))
+        .map((q) => q.refId);
+
+      let expressionQueries = state.queries.filter((query) => isExpressionQuery(query.model));
+
+      for (const removedRefId of removedRefIds) {
+        expressionQueries = queriesWithRemovedReferences(expressionQueries, removedRefId);
+      }
+
       state.queries = [...payload, ...expressionQueries];
     })
     .addCase(setRecordingRulesQueries, (state, { payload }) => {
@@ -153,7 +163,8 @@ export const queriesAndExpressionsReducer = createReducer(initialState, (builder
       });
     })
     .addCase(removeExpression, (state, { payload }) => {
-      state.queries = state.queries.filter((query) => query.refId !== payload);
+      const filteredQueries = state.queries.filter((query) => query.refId !== payload);
+      state.queries = queriesWithRemovedReferences(filteredQueries, payload);
     })
     .addCase(removeExpressions, (state) => {
       state.queries = state.queries.filter((query) => !isExpressionQuery(query.model));
