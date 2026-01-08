@@ -226,8 +226,7 @@ func (hs *HTTPServer) registerRoutes() {
 		r.Post("/api/user/email/start-verify", reqSignedInNoAnonymous, routing.Wrap(hs.StartEmailVerificaton))
 	}
 
-	//nolint:staticcheck // not yet migrated to OpenFeature
-	if hs.Cfg.PasswordlessMagicLinkAuth.Enabled && hs.Features.IsEnabledGlobally(featuremgmt.FlagPasswordlessMagicLinkAuthentication) {
+	if hs.Cfg.PasswordlessMagicLinkAuth.Enabled {
 		r.Post("/api/login/passwordless/start", requestmeta.SetOwner(requestmeta.TeamAuth), quota(string(auth.QuotaTargetSrv)), hs.StartPasswordless)
 		r.Post("/api/login/passwordless/authenticate", requestmeta.SetOwner(requestmeta.TeamAuth), quota(string(auth.QuotaTargetSrv)), routing.Wrap(hs.LoginPasswordless))
 	}

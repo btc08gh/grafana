@@ -699,10 +699,6 @@ export interface FeatureToggles {
   */
   playlistsReconciler?: boolean;
   /**
-  * Enable passwordless login via magic link authentication
-  */
-  passwordlessMagicLinkAuthentication?: boolean;
-  /**
   * Display Related Logs in Grafana Metrics Drilldown
   */
   exploreMetricsRelatedLogs?: boolean;

@@ -1155,14 +1155,7 @@ var (
 			Owner:           grafanaAppPlatformSquad,
 			RequiresRestart: true,
 		},
-		{
-			Name:         "passwordlessMagicLinkAuthentication",
-			Description:  "Enable passwordless login via magic link authentication",
-			Stage:        FeatureStageExperimental,
-			Owner:        identityAccessTeam,
-			HideFromDocs: true,
-		},
-		{
+			{
 			Name:         "exploreMetricsRelatedLogs",
 			Description:  "Display Related Logs in Grafana Metrics Drilldown",
 			Stage:        FeatureStageExperimental,

@@ -410,8 +410,7 @@ func (hs *HTTPServer) getFrontendSettings(c *contextmodel.ReqContext) (*dtos.Fro
 		DisableSignoutMenu:            hs.Cfg.DisableSignoutMenu,
 	}
 
-	//nolint:staticcheck // not yet migrated to OpenFeature
-	if hs.Cfg.PasswordlessMagicLinkAuth.Enabled && hs.Features.IsEnabled(c.Req.Context(), featuremgmt.FlagPasswordlessMagicLinkAuthentication) {
+	if hs.Cfg.PasswordlessMagicLinkAuth.Enabled {
 		hasEnabledProviders := hs.samlEnabled() || hs.authnService.IsClientEnabled(authn.ClientLDAP)
 
 		if !hasEnabledProviders {

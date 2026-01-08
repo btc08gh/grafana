@@ -1,8 +1,6 @@
 package authnimpl
 
 import (
-	"context"
-
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/infra/remotecache"
 	"github.com/grafana/grafana/pkg/infra/tracing"
@@ -83,8 +81,7 @@ func ProvideRegistration(
 		}
 	}
 
-	//nolint:staticcheck // not yet migrated to OpenFeature
-	if cfg.PasswordlessMagicLinkAuth.Enabled && features.IsEnabled(context.Background(), featuremgmt.FlagPasswordlessMagicLinkAuthentication) {
+	if cfg.PasswordlessMagicLinkAuth.Enabled {
 		hasEnabledProviders := authnSvc.IsClientEnabled(authn.ClientSAML) || authnSvc.IsClientEnabled(authn.ClientLDAP)
 		if !hasEnabledProviders {
 			oauthInfos := socialService.GetOAuthInfoProviders()
