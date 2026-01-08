@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -316,6 +315,12 @@ func (s *SearchHandler) DoSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 	sort.Slice(parsedResults.Hits, func(i, j int) bool {
+	// 		// Just sorting by resource for now. The rest should be sorted by search score already
+	// 		return parsedResults.Hits[i].Resource > parsedResults.Hits[j].Resource
+	// 	})
+	// }
+
 	result, err := s.client.Search(ctx, searchRequest)
 	if err != nil {
 		errhttp.Write(ctx, err, w)
@@ -330,14 +335,6 @@ func (s *SearchHandler) DoSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errhttp.Write(ctx, err, w)
 		return
-	}
-
-	if len(searchRequest.SortBy) == 0 {
-		// default sort by resource descending ( folders then dashboards ) then title
-		sort.Slice(parsedResults.Hits, func(i, j int) bool {
-			// Just sorting by resource for now. The rest should be sorted by search score already
-			return parsedResults.Hits[i].Resource > parsedResults.Hits[j].Resource
-		})
 	}
 
 	s.write(w, parsedResults)
@@ -427,6 +424,18 @@ func convertHttpSearchRequestToResourceSearchRequest(queryParams url.Values, use
 				s.Field = s.Field[1:]
 			}
 			searchRequest.SortBy = append(searchRequest.SortBy, s)
+		}
+	} else if searchRequest.Query == "" {
+		// When no query exists, return the results in a predictable order
+		searchRequest.SortBy = []*resourcepb.ResourceSearchRequest_Sort{
+			{
+				Field: resource.SEARCH_FIELD_GROUP_RESOURCE, // folders then dashboards
+				Desc:  true,
+			},
+			{
+				Field: resource.SEARCH_FIELD_TITLE, // then title
+				Desc:  false,
+			},
 		}
 	}
 
