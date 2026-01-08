@@ -170,6 +170,12 @@ func (r *ResourcePermissionsAuthorizer) FilterList(ctx context.Context, list run
 	if !ok {
 		return nil, storewrapper.ErrUnauthenticated
 	}
+	r.logger.Debug("filtering resource permissions list with auth info",
+		"namespace", authInfo.GetNamespace(),
+		"identity Subject", authInfo.GetSubject(),
+		"identity UID", authInfo.GetUID(),
+		"identity type", authInfo.GetIdentityType(),
+	)
 
 	switch l := list.(type) {
 	case *iamv0.ResourcePermissionList:
