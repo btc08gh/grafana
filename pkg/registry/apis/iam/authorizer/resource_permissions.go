@@ -173,38 +173,46 @@ func (r *ResourcePermissionsAuthorizer) FilterList(ctx context.Context, list run
 
 	switch l := list.(type) {
 	case *iamv0.ResourcePermissionList:
+
+		r.logger.Debug("filtering list of length", "length", len(l.Items))
 		var (
 			filteredItems []iamv0.ResourcePermission
 			err           error
 			canViewFuncs  = map[schema.GroupResource]types.ItemChecker{}
 		)
 		for _, item := range l.Items {
-			gr := schema.GroupResource{
-				Group:    item.Spec.Resource.ApiGroup,
-				Resource: item.Spec.Resource.Resource,
-			}
+			target := item.Spec.Resource
+			targetGR := schema.GroupResource{Group: target.ApiGroup, Resource: target.Resource}
+
+			r.logger.Debug("target resource",
+				"group", target.ApiGroup,
+				"resource", target.Resource,
+				"name", target.Name,
+			)
 
 			// Reuse the same canView for items with the same resource
-			canView, found := canViewFuncs[gr]
+			canView, found := canViewFuncs[targetGR]
 
 			if !found {
 				listReq := types.ListRequest{
 					Namespace: item.Namespace,
-					Group:     item.Spec.Resource.ApiGroup,
-					Resource:  item.Spec.Resource.Resource,
+					Group:     target.ApiGroup,
+					Resource:  target.Resource,
 					Verb:      utils.VerbGetPermissions,
 				}
-
+				r.logger.Debug("compiling list request",
+					"namespace", item.Namespace,
+					"group", target.ApiGroup,
+					"resource", target.Resource,
+					"verb", utils.VerbGetPermissions,
+				)
 				canView, _, err = r.accessClient.Compile(ctx, authInfo, listReq)
 				if err != nil {
 					return nil, err
 				}
 
-				canViewFuncs[gr] = canView
+				canViewFuncs[targetGR] = canView
 			}
-
-			target := item.Spec.Resource
-			targetGR := schema.GroupResource{Group: target.ApiGroup, Resource: target.Resource}
 
 			parent := ""
 			// Fetch the parent of the resource
@@ -223,6 +231,13 @@ func (r *ResourcePermissionsAuthorizer) FilterList(ctx context.Context, list run
 					)
 					continue
 				}
+				r.logger.Debug("fetched parent",
+					"parent", p,
+					"namespace", item.Namespace,
+					"group", target.ApiGroup,
+					"resource", target.Resource,
+					"name", target.Name,
+				)
 				parent = p
 			}
 
