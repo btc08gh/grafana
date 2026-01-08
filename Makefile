@@ -135,7 +135,7 @@ i18n-extract-enterprise:
 	@echo "Skipping i18n extract for Enterprise: not enabled"
 else
 i18n-extract-enterprise:
-	@echo "Extracting i18n strings for Enterprise"	
+	@echo "Extracting i18n strings for Enterprise"
 	cd public/locales/enterprise && yarn run i18next-cli extract --sync-primary
 endif
 
@@ -418,6 +418,11 @@ shellcheck: $(SH_FILES) ## Run checks for shell scripts.
 TAG_SUFFIX=$(if $(WIRE_TAGS)!=oss,-$(WIRE_TAGS))
 PLATFORM=linux/amd64
 
+# JS_SRC can be set to a pre-built JS image to skip frontend build
+# Example: make build-docker-full JS_SRC=grafana-js-cache:latest
+JS_SRC ?=
+DOCKER_JS_SRC_ARG = $(if $(JS_SRC),--build-arg JS_SRC=$(JS_SRC))
+
 # default to a production build for frontend
 #
 DOCKER_JS_NODE_ENV_FLAG = production
@@ -436,13 +441,20 @@ ifeq (${NODE_ENV}, dev)
   DOCKER_JS_YARN_BUILD_FLAG = dev
 	DOCKER_JS_YARN_INSTALL_FLAG =
 endif
+.PHONY: build-docker-js-cache
+build-docker-js-cache: ## Build and cache the frontend Docker image for faster subsequent builds.
+	@echo "building JS cache image"
+	docker buildx build . \
+	--platform $(PLATFORM) \
+	--target js-builder \
+	--tag grafana-js-cache:latest
 
 .PHONY: build-docker-full
 build-docker-full: ## Build Docker image for development.
 	@echo "build docker container mode=($(DOCKER_JS_NODE_ENV_FLAG))"
-	tar -ch . | \
-	docker buildx build - \
+	docker buildx build . \
 	--platform $(PLATFORM) \
+	$(DOCKER_JS_SRC_ARG) \
 	--build-arg NODE_ENV=$(DOCKER_JS_NODE_ENV_FLAG) \
 	--build-arg JS_NODE_ENV=$(DOCKER_JS_NODE_ENV_FLAG) \
 	--build-arg JS_YARN_INSTALL_FLAG=$(DOCKER_JS_YARN_INSTALL_FLAG) \

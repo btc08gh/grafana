@@ -118,7 +118,7 @@ COPY pkg/codegen pkg/codegen
 COPY pkg/plugins/codegen pkg/plugins/codegen
 COPY apps/example apps/example
 
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY embed.go Makefile build.go package.json ./
 COPY cue.mod cue.mod
@@ -135,7 +135,9 @@ COPY .github .github
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 
-RUN make build-go GO_BUILD_TAGS=${GO_BUILD_TAGS} WIRE_TAGS=${WIRE_TAGS}
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    make build-go GO_BUILD_TAGS=${GO_BUILD_TAGS} WIRE_TAGS=${WIRE_TAGS}
 
 # From-tarball build stage
 FROM ${BASE_IMAGE} AS tgz-builder
@@ -168,7 +170,8 @@ ENV PATH="/usr/share/grafana/bin:$PATH" \
   GF_PATHS_HOME="/usr/share/grafana" \
   GF_PATHS_LOGS="/var/log/grafana" \
   GF_PATHS_PLUGINS="/var/lib/grafana/plugins" \
-  GF_PATHS_PROVISIONING="/etc/grafana/provisioning"
+  GF_PATHS_PROVISIONING="/etc/grafana/provisioning" \
+  GF_UNIFIED_STORAGE_INDEX_PATH="/var/lib/grafana-search/bleve"
 
 WORKDIR $GF_PATHS_HOME
 
@@ -225,13 +228,14 @@ RUN if [ ! $(getent group "$GF_GID") ]; then \
   "$GF_PATHS_PROVISIONING/plugins" \
   "$GF_PATHS_PROVISIONING/access-control" \
   "$GF_PATHS_PROVISIONING/alerting" \
+  "$GF_UNIFIED_STORAGE_INDEX_PATH" \
   "$GF_PATHS_LOGS" \
   "$GF_PATHS_PLUGINS" \
   "$GF_PATHS_DATA" && \
   cp conf/sample.ini "$GF_PATHS_CONFIG" && \
   cp conf/ldap.toml /etc/grafana/ldap.toml && \
-  chown -R "grafana:$GF_GID_NAME" "$GF_PATHS_DATA" "$GF_PATHS_HOME/.aws" "$GF_PATHS_LOGS" "$GF_PATHS_PLUGINS" "$GF_PATHS_PROVISIONING" && \
-  chmod -R 777 "$GF_PATHS_DATA" "$GF_PATHS_HOME/.aws" "$GF_PATHS_LOGS" "$GF_PATHS_PLUGINS" "$GF_PATHS_PROVISIONING"
+  chown -R "grafana:$GF_GID_NAME" "$GF_PATHS_DATA" "$GF_PATHS_HOME/.aws" "$GF_PATHS_LOGS" "$GF_PATHS_PLUGINS" "$GF_PATHS_PROVISIONING" "$GF_UNIFIED_STORAGE_INDEX_PATH" && \
+  chmod -R 777 "$GF_PATHS_DATA" "$GF_PATHS_HOME/.aws" "$GF_PATHS_LOGS" "$GF_PATHS_PLUGINS" "$GF_PATHS_PROVISIONING" "$GF_UNIFIED_STORAGE_INDEX_PATH"
 
 COPY --from=go-src /tmp/grafana/bin/grafana* /tmp/grafana/bin/*/grafana* ./bin/
 COPY --from=js-src /tmp/grafana/public ./public
