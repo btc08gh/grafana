@@ -420,6 +420,9 @@ func (ds *distributorServer) searchSubIndexWithFailover(ctx context.Context, sub
 	rCtx := userutils.InjectOrgID(metadata.NewOutgoingContext(ctx, md), subIndex.Namespace)
 
 	// Try each replica in order until success
+	// Per-replica timeout ensures SLO compliance (≤500ms for distributed search)
+	// With replication factor 2: worst case is 2 attempts × 200ms = 400ms, leaving room for merge
+	const replicaTimeout = 200 * time.Millisecond
 	var lastErr error
 	for replicaIdx, replica := range replicas {
 		client, err := ds.clientPool.GetClientForInstance(replica)
@@ -433,7 +436,11 @@ func (ds *distributorServer) searchSubIndexWithFailover(ctx context.Context, sub
 			continue
 		}
 
-		resp, err := client.(*RingClient).Client.Search(rCtx, r)
+		// Apply per-replica timeout to ensure failover happens quickly
+		replicaCtx, cancel := context.WithTimeout(rCtx, replicaTimeout)
+		resp, err := client.(*RingClient).Client.Search(replicaCtx, r)
+		cancel() // Always cancel to release resources
+
 		if err == nil && resp.Error == nil {
 			// Success
 			result.response = resp
