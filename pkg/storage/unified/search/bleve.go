@@ -83,6 +83,11 @@ type BleveOptions struct {
 	// If nil, all indexes are owned by the current instance.
 	OwnsIndex func(key resource.NamespacedResource) (bool, error)
 
+	// OwnsSubIndex is called to check whether a specific sub-index is owned by the current instance.
+	// This function considers the sub-index ID when determining ownership via ring hash.
+	// If nil, falls back to OwnsIndex behavior with subIndexID=0.
+	OwnsSubIndex func(key resource.NamespacedResource, subIndexID int) (bool, error)
+
 	// SubIndexCount is the number of sub-indexes per (namespace, group, resource).
 	// When > 0, documents are distributed across sub-indexes using consistent hashing.
 	// This enables horizontal scaling for large namespaces (1M+ documents).
@@ -101,6 +106,10 @@ type bleveBackend struct {
 
 	// set from opts.OwnsIndex, always non-nil
 	ownsIndexFn func(key resource.NamespacedResource) (bool, error)
+
+	// set from opts.OwnsSubIndex, always non-nil
+	// Used for checking ownership of sub-indexes when sharding is enabled
+	ownsSubIndexFn func(key resource.NamespacedResource, subIndexID int) (bool, error)
 
 	cacheMx sync.RWMutex
 	cache   map[resource.NamespacedResource]*bleveIndex
@@ -152,13 +161,23 @@ func NewBleveBackend(opts BleveOptions, indexMetrics *resource.BleveIndexMetrics
 		ownFn = func(key resource.NamespacedResource) (bool, error) { return true, nil }
 	}
 
+	ownSubFn := opts.OwnsSubIndex
+	if ownSubFn == nil {
+		// By default, fall back to OwnsIndex behavior (ignore subIndexID).
+		// This maintains backward compatibility when sub-index sharding is not enabled.
+		ownSubFn = func(key resource.NamespacedResource, subIndexID int) (bool, error) {
+			return ownFn(key)
+		}
+	}
+
 	be := &bleveBackend{
-		log:           l,
-		cache:         map[resource.NamespacedResource]*bleveIndex{},
-		subIndexCache: map[resource.SubIndexKey]*bleveIndex{},
-		opts:          opts,
-		ownsIndexFn:   ownFn,
-		indexMetrics:  indexMetrics,
+		log:            l,
+		cache:          map[resource.NamespacedResource]*bleveIndex{},
+		subIndexCache:  map[resource.SubIndexKey]*bleveIndex{},
+		opts:           opts,
+		ownsIndexFn:    ownFn,
+		ownsSubIndexFn: ownSubFn,
+		indexMetrics:   indexMetrics,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -292,7 +311,13 @@ func (b *bleveBackend) runEvictExpiredOrUnownedIndexes(now time.Time) {
 	unowned := map[resource.NamespacedResource]*bleveIndex{}
 	ownCheckErrors := map[resource.NamespacedResource]error{}
 
+	// For sub-indexes
+	expiredSubIndexes := map[resource.SubIndexKey]*bleveIndex{}
+	unownedSubIndexes := map[resource.SubIndexKey]*bleveIndex{}
+	ownSubCheckErrors := map[resource.SubIndexKey]error{}
+
 	b.cacheMx.Lock()
+	// Process main cache (non-sharded indexes)
 	for key, idx := range b.cache {
 		// Check if index has expired.
 		if !idx.expiration.IsZero() && now.After(idx.expiration) {
@@ -312,20 +337,74 @@ func (b *bleveBackend) runEvictExpiredOrUnownedIndexes(now time.Time) {
 			}
 		}
 	}
+
+	// Process sub-index cache (sharded indexes)
+	for subKey, idx := range b.subIndexCache {
+		// Check if sub-index has expired.
+		if !idx.expiration.IsZero() && now.After(idx.expiration) {
+			delete(b.subIndexCache, subKey)
+			expiredSubIndexes[subKey] = idx
+			continue
+		}
+
+		// Check if sub-index is owned by this instance using OwnsSubIndex.
+		// This considers the subIndexID when determining ownership via ring hash.
+		if cacheTTLMillis > 0 {
+			owned, err := b.ownsSubIndexFn(subKey.NamespacedResource, subKey.SubIndexID)
+			if err != nil {
+				ownSubCheckErrors[subKey] = err
+			} else if !owned && now.UnixMilli()-idx.lastFetchedFromCache.Load() > cacheTTLMillis {
+				delete(b.subIndexCache, subKey)
+				unownedSubIndexes[subKey] = idx
+			}
+		}
+	}
 	b.cacheMx.Unlock()
 
+	// Log errors for main cache ownership checks
 	for key, err := range ownCheckErrors {
 		b.log.Warn("failed to check if index belongs to this instance", "key", key, "err", err)
 	}
 
+	// Log errors for sub-index ownership checks
+	for subKey, err := range ownSubCheckErrors {
+		b.log.Warn("failed to check if sub-index belongs to this instance", "subKey", subKey, "err", err)
+	}
+
+	// Evict unowned main indexes
 	for key, idx := range unowned {
 		b.log.Info("index evicted from cache", "reason", "unowned", "key", key, "storage", idx.indexStorage)
 		b.closeIndex(idx, key)
 	}
 
+	// Evict unowned sub-indexes
+	for subKey, idx := range unownedSubIndexes {
+		b.log.Info("sub-index evicted from cache", "reason", "unowned", "subKey", subKey, "storage", idx.indexStorage)
+		b.closeSubIndex(idx, subKey)
+	}
+
+	// Evict expired main indexes
 	for key, idx := range expired {
 		b.log.Info("index evicted from cache", "reason", "expired", "key", key, "storage", idx.indexStorage)
 		b.closeIndex(idx, key)
+	}
+
+	// Evict expired sub-indexes
+	for subKey, idx := range expiredSubIndexes {
+		b.log.Info("sub-index evicted from cache", "reason", "expired", "subKey", subKey, "storage", idx.indexStorage)
+		b.closeSubIndex(idx, subKey)
+	}
+}
+
+// closeSubIndex closes a sub-index and updates metrics.
+func (b *bleveBackend) closeSubIndex(idx *bleveIndex, key resource.SubIndexKey) {
+	err := idx.stopUpdaterAndCloseIndex()
+	if err != nil {
+		b.log.Error("failed to close sub-index", "key", key, "err", err)
+	}
+
+	if b.indexMetrics != nil {
+		b.indexMetrics.OpenIndexes.WithLabelValues(idx.indexStorage).Dec()
 	}
 }
 
@@ -742,11 +821,24 @@ func (b *bleveBackend) closeAllIndexes() {
 	b.cacheMx.Lock()
 	defer b.cacheMx.Unlock()
 
+	// Close main indexes
 	for key, idx := range b.cache {
 		if err := idx.stopUpdaterAndCloseIndex(); err != nil {
 			b.log.Error("Failed to close index", "err", err)
 		}
 		delete(b.cache, key)
+
+		if b.indexMetrics != nil {
+			b.indexMetrics.OpenIndexes.WithLabelValues(idx.indexStorage).Dec()
+		}
+	}
+
+	// Close sub-indexes
+	for subKey, idx := range b.subIndexCache {
+		if err := idx.stopUpdaterAndCloseIndex(); err != nil {
+			b.log.Error("Failed to close sub-index", "subKey", subKey, "err", err)
+		}
+		delete(b.subIndexCache, subKey)
 
 		if b.indexMetrics != nil {
 			b.indexMetrics.OpenIndexes.WithLabelValues(idx.indexStorage).Dec()

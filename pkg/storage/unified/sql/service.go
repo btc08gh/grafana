@@ -226,6 +226,18 @@ var (
 )
 
 func (s *service) OwnsIndex(key resource.NamespacedResource) (bool, error) {
+	// When sub-index sharding is enabled, use OwnsSubIndex with subIndexID=0
+	// to maintain backward compatibility. OwnsIndex is used for the main index.
+	return s.OwnsSubIndex(key, 0)
+}
+
+// OwnsSubIndex checks if the current instance owns a specific sub-index.
+// The sub-index ID is included in the ring hash to distribute sub-indexes
+// across nodes in the ring. This enables horizontal scaling for large namespaces.
+//
+// When subIndexID is 0 and SubIndexesPerNamespace is 0 (disabled), this behaves
+// exactly like the original OwnsIndex - maintaining backward compatibility.
+func (s *service) OwnsSubIndex(key resource.NamespacedResource, subIndexID int) (bool, error) {
 	if s.searchRing == nil {
 		return true, nil
 	}
@@ -235,9 +247,22 @@ func (s *service) OwnsIndex(key resource.NamespacedResource) (bool, error) {
 	}
 
 	ringHasher := fnv.New32a()
-	_, err := ringHasher.Write([]byte(key.Namespace))
-	if err != nil {
-		return false, fmt.Errorf("error hashing namespace: %w", err)
+
+	// When sub-index sharding is enabled (SubIndexesPerNamespace > 0),
+	// include the subIndexID in the hash to distribute sub-indexes across nodes.
+	// This allows different sub-indexes of the same namespace to be owned by
+	// different nodes, enabling horizontal scaling.
+	if s.cfg.SubIndexesPerNamespace > 0 {
+		_, err := ringHasher.Write([]byte(fmt.Sprintf("%s/%d", key.Namespace, subIndexID)))
+		if err != nil {
+			return false, fmt.Errorf("error hashing namespace with sub-index: %w", err)
+		}
+	} else {
+		// Original behavior: hash only the namespace
+		_, err := ringHasher.Write([]byte(key.Namespace))
+		if err != nil {
+			return false, fmt.Errorf("error hashing namespace: %w", err)
+		}
 	}
 
 	rs, err := s.searchRing.GetWithOptions(ringHasher.Sum32(), searchOwnerRead, ring.WithReplicationFactor(s.searchRing.ReplicationFactor()))
@@ -261,7 +286,7 @@ func (s *service) starting(ctx context.Context) error {
 		return err
 	}
 
-	searchOptions, err := search.NewSearchOptions(s.features, s.cfg, s.docBuilders, s.indexMetrics, s.OwnsIndex)
+	searchOptions, err := search.NewSearchOptions(s.features, s.cfg, s.docBuilders, s.indexMetrics, s.OwnsIndex, s.OwnsSubIndex)
 	if err != nil {
 		return err
 	}

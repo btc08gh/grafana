@@ -17,6 +17,7 @@ func NewSearchOptions(
 	docs resource.DocumentBuilderSupplier,
 	indexMetrics *resource.BleveIndexMetrics,
 	ownsIndexFn func(key resource.NamespacedResource) (bool, error),
+	ownsSubIndexFn ...func(key resource.NamespacedResource, subIndexID int) (bool, error),
 ) (resource.SearchOptions, error) {
 	//nolint:staticcheck // not yet migrated to OpenFeature
 	if cfg.EnableSearch || features.IsEnabledGlobally(featuremgmt.FlagProvisioning) {
@@ -39,13 +40,22 @@ func NewSearchOptions(
 			}
 		}
 
+		// Get OwnsSubIndex function if provided
+		var ownsSubIdx func(key resource.NamespacedResource, subIndexID int) (bool, error)
+		if len(ownsSubIndexFn) > 0 && ownsSubIndexFn[0] != nil {
+			ownsSubIdx = ownsSubIndexFn[0]
+		}
+
 		bleve, err := NewBleveBackend(BleveOptions{
 			Root:                   root,
 			FileThreshold:          int64(cfg.IndexFileThreshold), // fewer than X items will use a memory index
 			IndexCacheTTL:          cfg.IndexCacheTTL,             // How long to keep the index cache in memory
 			BuildVersion:           cfg.BuildVersion,
 			OwnsIndex:              ownsIndexFn,
+			OwnsSubIndex:           ownsSubIdx,
 			IndexMinUpdateInterval: cfg.IndexMinUpdateInterval,
+			SubIndexCount:          cfg.SubIndexesPerNamespace,
+			LargeFolderThreshold:   cfg.LargeFolderThreshold,
 		}, indexMetrics)
 
 		if err != nil {
