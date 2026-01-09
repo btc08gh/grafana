@@ -511,6 +511,12 @@ func (b *bleveBackend) BuildIndex(
 		attribute.String("reason", indexBuildReason),
 	)
 
+	// If sub-index sharding is enabled, delegate to the parallel sub-index builder
+	if b.opts.SubIndexCount > 0 {
+		span.SetAttributes(attribute.Int("sub_index_count", b.opts.SubIndexCount))
+		return b.buildShardedIndex(ctx, key, size, fields, indexBuildReason, builder, updater, rebuild)
+	}
+
 	mapper, err := GetBleveMappings(fields)
 	if err != nil {
 		return nil, err
@@ -744,6 +750,282 @@ func isPathWithinRoot(path, absoluteRoot string) bool {
 		return false
 	}
 	return true
+}
+
+// buildShardedIndex builds all sub-indexes in parallel and returns a compositeIndex.
+// This is used when sub-index sharding is enabled (SubIndexCount > 0).
+func (b *bleveBackend) buildShardedIndex(
+	ctx context.Context,
+	key resource.NamespacedResource,
+	size int64,
+	fields resource.SearchableDocumentFields,
+	indexBuildReason string,
+	builder resource.BuildFn,
+	updater resource.UpdateFn,
+	rebuild bool,
+) (resource.ResourceIndex, error) {
+	_, span := tracer.Start(ctx, "search.bleveBackend.buildShardedIndex")
+	defer span.End()
+
+	logWithDetails := b.log.FromContext(ctx).New(
+		"namespace", key.Namespace,
+		"group", key.Group,
+		"resource", key.Resource,
+		"size", size,
+		"reason", indexBuildReason,
+		"sub_index_count", b.opts.SubIndexCount,
+	)
+
+	mapper, err := GetBleveMappings(fields)
+	if err != nil {
+		return nil, err
+	}
+
+	standardSearchFields := resource.StandardSearchFields()
+	allFields, err := getAllFields(standardSearchFields, fields)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate size per sub-index for threshold decisions
+	sizePerSubIndex := size / int64(b.opts.SubIndexCount)
+	if sizePerSubIndex < 1 {
+		sizePerSubIndex = 1
+	}
+
+	// Create all sub-indexes in parallel
+	type subIndexResult struct {
+		subIndex    *bleveIndex
+		subIndexKey resource.SubIndexKey
+		err         error
+	}
+
+	results := make([]subIndexResult, b.opts.SubIndexCount)
+	var wg sync.WaitGroup
+
+	logWithDetails.Info("Building sharded index", "sub_index_count", b.opts.SubIndexCount, "size_per_sub_index", sizePerSubIndex)
+
+	for i := 0; i < b.opts.SubIndexCount; i++ {
+		wg.Add(1)
+		go func(subIndexID int) {
+			defer wg.Done()
+			subKey := resource.SubIndexKey{
+				NamespacedResource: key,
+				SubIndexID:         subIndexID,
+			}
+			results[subIndexID].subIndexKey = subKey
+
+			// Build individual sub-index
+			idx, buildErr := b.buildSingleSubIndex(
+				ctx, subKey, sizePerSubIndex, mapper, fields, allFields, standardSearchFields, updater, indexBuildReason, rebuild,
+			)
+			if buildErr != nil {
+				results[subIndexID].err = buildErr
+				return
+			}
+			results[subIndexID].subIndex = idx
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Check for errors and collect successful sub-indexes
+	subIndexes := make([]*bleveIndex, 0, b.opts.SubIndexCount)
+	var firstErr error
+	for i, result := range results {
+		if result.err != nil {
+			logWithDetails.Error("Failed to build sub-index", "sub_index_id", i, "err", result.err)
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		if result.subIndex != nil {
+			subIndexes = append(subIndexes, result.subIndex)
+		}
+	}
+
+	// If any sub-index failed, clean up and return error
+	if firstErr != nil {
+		for _, result := range results {
+			if result.subIndex != nil {
+				_ = result.subIndex.stopUpdaterAndCloseIndex()
+			}
+		}
+		return nil, fmt.Errorf("failed to build sharded index: %w", firstErr)
+	}
+
+	// Create the composite index
+	composite := b.newCompositeIndex(key, subIndexes, fields, allFields, standardSearchFields, b.log.New("namespace", key.Namespace, "group", key.Group, "resource", key.Resource))
+
+	// Build the index by calling the builder with the composite index
+	// The builder will call BulkIndex on the composite, which routes documents to correct sub-indexes
+	if b.indexMetrics != nil {
+		b.indexMetrics.IndexBuilds.WithLabelValues(indexBuildReason).Inc()
+	}
+
+	start := time.Now()
+	listRV, err := builder(composite)
+	if err != nil {
+		logWithDetails.Error("Failed to build sharded index", "err", err)
+		if b.indexMetrics != nil {
+			b.indexMetrics.IndexBuildFailures.Inc()
+		}
+		// Clean up all sub-indexes on failure
+		for _, idx := range subIndexes {
+			_ = idx.stopUpdaterAndCloseIndex()
+		}
+		return nil, fmt.Errorf("failed to build sharded index: %w", err)
+	}
+
+	// Update resource version on all sub-indexes
+	for _, idx := range subIndexes {
+		if err := idx.updateResourceVersion(listRV); err != nil {
+			logWithDetails.Error("Failed to persist RV to sub-index", "err", err, "rv", listRV)
+			// Continue - this is not fatal
+		}
+	}
+
+	elapsed := time.Since(start)
+	logWithDetails.Info("Finished building sharded index", "elapsed", elapsed, "listRV", listRV, "sub_indexes_built", len(subIndexes))
+
+	if b.indexMetrics != nil {
+		b.indexMetrics.IndexCreationTime.WithLabelValues().Observe(elapsed.Seconds())
+	}
+
+	// Store sub-indexes in the cache
+	b.cacheMx.Lock()
+	for i, idx := range subIndexes {
+		subKey := resource.SubIndexKey{
+			NamespacedResource: key,
+			SubIndexID:         i,
+		}
+		prev := b.subIndexCache[subKey]
+		b.subIndexCache[subKey] = idx
+
+		// Close previous sub-index if it existed
+		if prev != nil {
+			if b.indexMetrics != nil {
+				b.indexMetrics.OpenIndexes.WithLabelValues(prev.indexStorage).Dec()
+			}
+			if err := prev.stopUpdaterAndCloseIndex(); err != nil {
+				logWithDetails.Error("failed to close previous sub-index", "sub_key", subKey, "err", err)
+			}
+		}
+		if b.indexMetrics != nil {
+			b.indexMetrics.OpenIndexes.WithLabelValues(idx.indexStorage).Inc()
+		}
+	}
+	b.cacheMx.Unlock()
+
+	return composite, nil
+}
+
+// buildSingleSubIndex builds a single sub-index for sharded indexing.
+func (b *bleveBackend) buildSingleSubIndex(
+	ctx context.Context,
+	subKey resource.SubIndexKey,
+	size int64,
+	mapper mapping.IndexMapping,
+	fields resource.SearchableDocumentFields,
+	allFields []*resourcepb.ResourceTableColumnDefinition,
+	standardSearchFields resource.SearchableDocumentFields,
+	updater resource.UpdateFn,
+	indexBuildReason string,
+	rebuild bool,
+) (*bleveIndex, error) {
+	key := subKey.ToNamespacedResource()
+	logWithDetails := b.log.FromContext(ctx).New(
+		"namespace", key.Namespace,
+		"group", key.Group,
+		"resource", key.Resource,
+		"sub_index_id", subKey.SubIndexID,
+		"size", size,
+	)
+
+	// Get directory for this sub-index
+	subIndexDir := b.getSubIndexDir(subKey)
+
+	var index bleve.Index
+	var indexRV int64
+	var err error
+	fileIndexName := ""
+	newIndexType := indexStorageMemory
+
+	if size >= b.opts.FileThreshold {
+		newIndexType = indexStorageFile
+
+		// Check for existing file-based index if not rebuilding
+		if !rebuild {
+			index, fileIndexName, indexRV, err = b.findPreviousFileBasedIndex(subIndexDir)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if index != nil {
+			logWithDetails.Debug("Existing sub-index found on filesystem", "indexRV", indexRV, "directory", filepath.Join(subIndexDir, fileIndexName))
+		} else {
+			// Create new file-based index
+			indexDir := ""
+			now := time.Now()
+			for index == nil {
+				fileIndexName = formatIndexName(now)
+				indexDir = filepath.Join(subIndexDir, fileIndexName)
+				if !isPathWithinRoot(indexDir, b.opts.Root) {
+					return nil, fmt.Errorf("invalid path %s", indexDir)
+				}
+
+				// Ensure sub-index directory exists
+				if err := os.MkdirAll(subIndexDir, 0750); err != nil {
+					return nil, fmt.Errorf("failed to create sub-index directory: %w", err)
+				}
+
+				index, err = newBleveIndex(indexDir, mapper, time.Now(), b.opts.BuildVersion)
+				if errors.Is(err, bleve.ErrorIndexPathExists) {
+					now = now.Add(time.Second)
+					index = nil
+					continue
+				}
+				if err != nil {
+					return nil, fmt.Errorf("error creating new bleve sub-index: %s %w", indexDir, err)
+				}
+			}
+			logWithDetails.Debug("Created new file-based sub-index", "directory", indexDir)
+		}
+	} else {
+		index, err = newBleveIndex("", mapper, time.Now(), b.opts.BuildVersion)
+		if err != nil {
+			return nil, fmt.Errorf("error creating new in-memory bleve sub-index: %w", err)
+		}
+		logWithDetails.Debug("Created new in-memory sub-index")
+	}
+
+	// Create the bleveIndex wrapper
+	idx := b.newBleveIndex(key, index, newIndexType, fields, allFields, standardSearchFields, updater, logWithDetails)
+
+	// Set expiration for in-memory indexes
+	if fileIndexName == "" && b.opts.IndexCacheTTL > 0 {
+		idx.expiration = time.Now().Add(b.opts.IndexCacheTTL)
+	}
+
+	// If we reused an existing index, set its resource version
+	if indexRV > 0 {
+		idx.resourceVersion = indexRV
+	}
+
+	return idx, nil
+}
+
+// getSubIndexDir returns the directory path for a sub-index.
+func (b *bleveBackend) getSubIndexDir(subKey resource.SubIndexKey) string {
+	key := subKey.ToNamespacedResource()
+	return filepath.Join(
+		b.opts.Root,
+		cleanFileSegment(key.Namespace),
+		cleanFileSegment(fmt.Sprintf("%s.%s", key.Resource, key.Group)),
+		fmt.Sprintf("shard-%d", subKey.SubIndexID),
+	)
 }
 
 // TotalDocs returns the total number of documents across all indices
