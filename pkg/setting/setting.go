@@ -603,6 +603,8 @@ type Cfg struct {
 	MaxFileIndexAge                            time.Duration // Max age of file-based indexes. Index older than this will be rebuilt asynchronously.
 	MinFileIndexBuildVersion                   string        // Minimum version of Grafana that built the file-based index. If index was built with older Grafana, it will be rebuilt asynchronously.
 	EnableSharding                             bool
+	SubIndexesPerNamespace                     int // Number of sub-indexes per (namespace, group, resource) for sharding. 0 = disabled.
+	LargeFolderThreshold                       int // Folders with more resources than this threshold get sub-sharded. 0 = disabled.
 	QOSEnabled                                 bool
 	QOSNumberWorker                            int
 	QOSMaxSizePerTenant                        int

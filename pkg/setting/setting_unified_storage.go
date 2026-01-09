@@ -106,6 +106,8 @@ func (cfg *Cfg) setUnifiedStorageConfig() {
 	cfg.IndexWorkers = section.Key("index_workers").MustInt(10)
 	cfg.IndexRebuildWorkers = section.Key("index_rebuild_workers").MustInt(5)
 	cfg.EnableSharding = section.Key("enable_sharding").MustBool(false)
+	cfg.SubIndexesPerNamespace = section.Key("sub_indexes_per_namespace").MustInt(0) // 0 = disabled, recommended: 64 for large scale
+	cfg.LargeFolderThreshold = section.Key("large_folder_threshold").MustInt(0)      // 0 = disabled, recommended: 10000
 	cfg.QOSEnabled = section.Key("qos_enabled").MustBool(false)
 	cfg.QOSNumberWorker = section.Key("qos_num_worker").MustInt(16)
 	cfg.QOSMaxSizePerTenant = section.Key("qos_max_size_per_tenant").MustInt(1000)

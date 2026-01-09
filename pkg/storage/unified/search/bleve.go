@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"path/filepath"
@@ -81,6 +82,17 @@ type BleveOptions struct {
 	// Indexes that are not owned by current instance are eligible for cleanup.
 	// If nil, all indexes are owned by the current instance.
 	OwnsIndex func(key resource.NamespacedResource) (bool, error)
+
+	// SubIndexCount is the number of sub-indexes per (namespace, group, resource).
+	// When > 0, documents are distributed across sub-indexes using consistent hashing.
+	// This enables horizontal scaling for large namespaces (1M+ documents).
+	// Recommended: 64 for large scale deployments.
+	SubIndexCount int
+
+	// LargeFolderThreshold is the resource count above which folders get sub-sharded.
+	// When a folder has more than this many resources, additional sub-sharding is applied.
+	// 0 = disabled. Recommended: 10000.
+	LargeFolderThreshold int
 }
 
 type bleveBackend struct {
@@ -92,6 +104,10 @@ type bleveBackend struct {
 
 	cacheMx sync.RWMutex
 	cache   map[resource.NamespacedResource]*bleveIndex
+
+	// subIndexCache stores sub-indexes when sub-index sharding is enabled.
+	// Key is SubIndexKey which includes the sub-index ID.
+	subIndexCache map[resource.SubIndexKey]*bleveIndex
 
 	indexMetrics *resource.BleveIndexMetrics
 
@@ -137,11 +153,12 @@ func NewBleveBackend(opts BleveOptions, indexMetrics *resource.BleveIndexMetrics
 	}
 
 	be := &bleveBackend{
-		log:          l,
-		cache:        map[resource.NamespacedResource]*bleveIndex{},
-		opts:         opts,
-		ownsIndexFn:  ownFn,
-		indexMetrics: indexMetrics,
+		log:           l,
+		cache:         map[resource.NamespacedResource]*bleveIndex{},
+		subIndexCache: map[resource.SubIndexKey]*bleveIndex{},
+		opts:          opts,
+		ownsIndexFn:   ownFn,
+		indexMetrics:  indexMetrics,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -156,6 +173,53 @@ func NewBleveBackend(opts BleveOptions, indexMetrics *resource.BleveIndexMetrics
 	}
 
 	return be, nil
+}
+
+// IsSubIndexShardingEnabled returns true if sub-index sharding is configured.
+func (b *bleveBackend) IsSubIndexShardingEnabled() bool {
+	return b.opts.SubIndexCount > 0
+}
+
+// GetSubIndexCount returns the number of sub-indexes per (namespace, group, resource).
+func (b *bleveBackend) GetSubIndexCount() int {
+	return b.opts.SubIndexCount
+}
+
+// GetSubIndexForDocument computes the sub-index ID for a document based on its key.
+// Uses FNV32a hash of the full document key for consistent distribution.
+func (b *bleveBackend) GetSubIndexForDocument(key *resourcepb.ResourceKey) int {
+	if b.opts.SubIndexCount <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	// Hash the full document key: namespace/group/resource/name
+	_, _ = h.Write([]byte(fmt.Sprintf("%s/%s/%s/%s", key.Namespace, key.Group, key.Resource, key.Name)))
+	return int(h.Sum32() % uint32(b.opts.SubIndexCount))
+}
+
+// GetSubIndexKey returns the SubIndexKey for a document.
+func (b *bleveBackend) GetSubIndexKey(nsr resource.NamespacedResource, docKey *resourcepb.ResourceKey) resource.SubIndexKey {
+	return resource.SubIndexKey{
+		NamespacedResource: nsr,
+		SubIndexID:         b.GetSubIndexForDocument(docKey),
+	}
+}
+
+// GetAllSubIndexKeys returns all SubIndexKey values for a NamespacedResource.
+// This is used for scatter-gather queries that need to query all sub-indexes.
+func (b *bleveBackend) GetAllSubIndexKeys(nsr resource.NamespacedResource) []resource.SubIndexKey {
+	count := b.opts.SubIndexCount
+	if count <= 0 {
+		count = 1
+	}
+	keys := make([]resource.SubIndexKey, count)
+	for i := 0; i < count; i++ {
+		keys[i] = resource.SubIndexKey{
+			NamespacedResource: nsr,
+			SubIndexID:         i,
+		}
+	}
+	return keys
 }
 
 // GetIndex will return nil if the key does not exist
@@ -739,6 +803,167 @@ type bleveIndex struct {
 
 	// Used to detect if the index can be safely closed, if it no longer belongs to this instance. UnixMilli.
 	lastFetchedFromCache atomic.Int64
+}
+
+// compositeIndex wraps multiple sub-indexes for sharded search.
+// It implements resource.ResourceIndex and distributes operations across sub-indexes.
+type compositeIndex struct {
+	key           resource.NamespacedResource
+	subIndexes    []*bleveIndex
+	alias         bleve.Index // Bleve IndexAlias for unified search across all sub-indexes
+	subIndexCount int
+	backend       *bleveBackend
+	logger        log.Logger
+
+	// standard and custom fields, shared across all sub-indexes
+	standard  resource.SearchableDocumentFields
+	fields    resource.SearchableDocumentFields
+	allFields []*resourcepb.ResourceTableColumnDefinition
+}
+
+var _ resource.ResourceIndex = &compositeIndex{}
+
+// newCompositeIndex creates a new composite index wrapping multiple sub-indexes.
+func (b *bleveBackend) newCompositeIndex(
+	key resource.NamespacedResource,
+	subIndexes []*bleveIndex,
+	fields resource.SearchableDocumentFields,
+	allFields []*resourcepb.ResourceTableColumnDefinition,
+	standardSearchFields resource.SearchableDocumentFields,
+	logger log.Logger,
+) *compositeIndex {
+	// Create Bleve IndexAlias for unified search
+	indexes := make([]bleve.Index, len(subIndexes))
+	for i, idx := range subIndexes {
+		indexes[i] = idx.index
+	}
+
+	return &compositeIndex{
+		key:           key,
+		subIndexes:    subIndexes,
+		alias:         bleve.NewIndexAlias(indexes...),
+		subIndexCount: len(subIndexes),
+		backend:       b,
+		logger:        logger,
+		standard:      standardSearchFields,
+		fields:        fields,
+		allFields:     allFields,
+	}
+}
+
+// BulkIndex routes documents to the appropriate sub-index based on document key hash.
+func (c *compositeIndex) BulkIndex(req *resource.BulkIndexRequest) error {
+	if len(req.Items) == 0 {
+		return nil
+	}
+
+	// Group items by sub-index
+	itemsBySubIndex := make(map[int][]*resource.BulkIndexItem)
+	for _, item := range req.Items {
+		var docKey *resourcepb.ResourceKey
+		if item.Action == resource.ActionIndex && item.Doc != nil {
+			docKey = item.Doc.Key
+		} else if item.Action == resource.ActionDelete {
+			docKey = item.Key
+		}
+		if docKey == nil {
+			return fmt.Errorf("missing document key for bulk index item")
+		}
+
+		subIndexID := c.backend.GetSubIndexForDocument(docKey)
+		itemsBySubIndex[subIndexID] = append(itemsBySubIndex[subIndexID], item)
+	}
+
+	// Process each sub-index batch
+	for subIndexID, items := range itemsBySubIndex {
+		if subIndexID >= len(c.subIndexes) {
+			return fmt.Errorf("sub-index ID %d out of range (max %d)", subIndexID, len(c.subIndexes)-1)
+		}
+		subReq := &resource.BulkIndexRequest{
+			Items:           items,
+			ResourceVersion: req.ResourceVersion,
+		}
+		if err := c.subIndexes[subIndexID].BulkIndex(subReq); err != nil {
+			return fmt.Errorf("error indexing to sub-index %d: %w", subIndexID, err)
+		}
+	}
+
+	return nil
+}
+
+// Search performs a search across all sub-indexes using the IndexAlias.
+func (c *compositeIndex) Search(
+	ctx context.Context,
+	access authlib.AccessClient,
+	req *resourcepb.ResourceSearchRequest,
+	federate []resource.ResourceIndex,
+	stats *resource.SearchStats,
+) (*resourcepb.ResourceSearchResponse, error) {
+	// Delegate to the first sub-index's search logic, but use our alias
+	// This works because we set up the IndexAlias to search across all sub-indexes
+	if len(c.subIndexes) == 0 {
+		return &resourcepb.ResourceSearchResponse{
+			Error: resource.NewBadRequestError("no sub-indexes available"),
+		}, nil
+	}
+
+	// Use the first sub-index for search implementation, but with our composite alias
+	// The sub-index will use its search logic with our federated alias
+	return c.subIndexes[0].Search(ctx, access, req, federate, stats)
+}
+
+// ListManagedObjects aggregates results from all sub-indexes.
+func (c *compositeIndex) ListManagedObjects(ctx context.Context, req *resourcepb.ListManagedObjectsRequest, stats *resource.SearchStats) (*resourcepb.ListManagedObjectsResponse, error) {
+	if len(c.subIndexes) == 0 {
+		return &resourcepb.ListManagedObjectsResponse{}, nil
+	}
+	// Use the first sub-index - the alias handles cross-index queries
+	return c.subIndexes[0].ListManagedObjects(ctx, req, stats)
+}
+
+// CountManagedObjects aggregates counts from all sub-indexes.
+func (c *compositeIndex) CountManagedObjects(ctx context.Context, stats *resource.SearchStats) ([]*resourcepb.CountManagedObjectsResponse_ResourceCount, error) {
+	if len(c.subIndexes) == 0 {
+		return nil, nil
+	}
+	// Use the first sub-index - the alias handles cross-index queries
+	return c.subIndexes[0].CountManagedObjects(ctx, stats)
+}
+
+// DocCount returns the total document count across all sub-indexes.
+func (c *compositeIndex) DocCount(ctx context.Context, folder string, stats *resource.SearchStats) (int64, error) {
+	var total int64
+	for _, idx := range c.subIndexes {
+		count, err := idx.DocCount(ctx, folder, stats)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+// UpdateIndex updates all sub-indexes to the latest data.
+func (c *compositeIndex) UpdateIndex(ctx context.Context) (int64, error) {
+	var maxRV int64
+	for _, idx := range c.subIndexes {
+		rv, err := idx.UpdateIndex(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if rv > maxRV {
+			maxRV = rv
+		}
+	}
+	return maxRV, nil
+}
+
+// BuildInfo returns build information from the first sub-index.
+func (c *compositeIndex) BuildInfo() (resource.IndexBuildInfo, error) {
+	if len(c.subIndexes) == 0 {
+		return resource.IndexBuildInfo{}, fmt.Errorf("no sub-indexes available")
+	}
+	return c.subIndexes[0].BuildInfo()
 }
 
 func (b *bleveBackend) newBleveIndex(

@@ -45,6 +45,23 @@ func (s *NamespacedResource) String() string {
 	return fmt.Sprintf("%s/%s/%s", s.Namespace, s.Group, s.Resource)
 }
 
+// SubIndexKey extends NamespacedResource with a sub-index identifier for sharding.
+// When sub-index sharding is enabled, each (namespace, group, resource) is split
+// into multiple sub-indexes identified by SubIndexID.
+type SubIndexKey struct {
+	NamespacedResource
+	SubIndexID int
+}
+
+func (s *SubIndexKey) String() string {
+	return fmt.Sprintf("%s/%s/%s/shard-%d", s.Namespace, s.Group, s.Resource, s.SubIndexID)
+}
+
+// ToNamespacedResource returns the NamespacedResource without the sub-index ID.
+func (s *SubIndexKey) ToNamespacedResource() NamespacedResource {
+	return s.NamespacedResource
+}
+
 type IndexAction int
 
 const (
