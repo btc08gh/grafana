@@ -44,7 +44,6 @@ func ProvideSearchDistributorServer(cfg *setting.Cfg, features featuremgmt.Featu
 		clientPool:             ringClientPool,
 		tracing:                tracer,
 		subIndexesPerNamespace: cfg.SubIndexesPerNamespace,
-		replicationFactor:      cfg.SearchRingReplicationFactor,
 	}
 
 	healthService, err := ProvideHealthService(distributorServer)
@@ -94,7 +93,6 @@ type distributorServer struct {
 	log                    log.Logger
 	tracing                trace.Tracer
 	subIndexesPerNamespace int // Number of sub-indexes per namespace (0 = disabled)
-	replicationFactor      int // Ring replication factor for replica failover
 }
 
 var (
@@ -271,7 +269,7 @@ func (ds *distributorServer) getClientToDistributeRequest(ctx context.Context, n
 		return ctx, nil, err
 	}
 
-	rs, err := ds.ring.GetWithOptions(ringHasher.Sum32(), searchRingRead, ring.WithReplicationFactor(ds.ring.ReplicationFactor()))
+	rs, err := ds.ring.GetWithOptions(ringHasher.Sum32(), searchRingRead)
 	if err != nil {
 		ds.log.Debug("error getting replication set from ring", "err", err, "namespace", namespace)
 		return ctx, nil, err
@@ -343,13 +341,7 @@ func (ds *distributorServer) getReplicasForSubIndex(subIndex SubIndexKey) ([]rin
 	if err != nil {
 		return nil, fmt.Errorf("error hashing sub-index key: %w", err)
 	}
-
-	replicationFactor := ds.replicationFactor
-	if replicationFactor <= 0 {
-		replicationFactor = ds.ring.ReplicationFactor()
-	}
-
-	rs, err := ds.ring.GetWithOptions(ringHasher.Sum32(), searchRingRead, ring.WithReplicationFactor(replicationFactor))
+	rs, err := ds.ring.GetWithOptions(ringHasher.Sum32(), searchRingRead)
 	if err != nil {
 		return nil, fmt.Errorf("error getting replication set from ring for sub-index %s: %w", subIndex.String(), err)
 	}

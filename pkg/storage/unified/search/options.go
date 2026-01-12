@@ -55,7 +55,6 @@ func NewSearchOptions(
 			OwnsSubIndex:           ownsSubIdx,
 			IndexMinUpdateInterval: cfg.IndexMinUpdateInterval,
 			SubIndexCount:          cfg.SubIndexesPerNamespace,
-			LargeFolderThreshold:   cfg.LargeFolderThreshold,
 		}, indexMetrics)
 
 		if err != nil {

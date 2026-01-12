@@ -102,21 +102,33 @@ func (cfg *Cfg) setUnifiedStorageConfig() {
 	}
 	cfg.EnableSearch = section.Key("enable_search").MustBool(false)
 	cfg.MaxPageSizeBytes = section.Key("max_page_size_bytes").MustInt(0)
+	// Index storage path. For Kubernetes Deployments without PVCs, use emptyDir:
+	//   index_path = /var/lib/grafana/unified-search/bleve
+	// Indexes are derived data and will be rebuilt from SQL on pod restart.
 	cfg.IndexPath = section.Key("index_path").String()
 	cfg.IndexWorkers = section.Key("index_workers").MustInt(10)
 	cfg.IndexRebuildWorkers = section.Key("index_rebuild_workers").MustInt(5)
+	// Sharding configuration for large-scale deployments (200k+ dashboards)
+	// When enable_sharding=true, indexes are distributed across pods using a ring.
+	// Each pod owns a subset of sub-indexes and rebuilds them from SQL on startup.
+	// This enables horizontal scaling without requiring PVCs (use emptyDir volumes).
 	cfg.EnableSharding = section.Key("enable_sharding").MustBool(false)
-	cfg.SubIndexesPerNamespace = section.Key("sub_indexes_per_namespace").MustInt(0) // 0 = disabled, recommended: 64 for large scale
-	cfg.LargeFolderThreshold = section.Key("large_folder_threshold").MustInt(0)      // 0 = disabled, recommended: 10000
+	cfg.SubIndexesPerNamespace = section.Key("sub_indexes_per_namespace").MustInt(0) // 0 = disabled, recommended: 64 for 1M scale
 	cfg.QOSEnabled = section.Key("qos_enabled").MustBool(false)
 	cfg.QOSNumberWorker = section.Key("qos_num_worker").MustInt(16)
 	cfg.QOSMaxSizePerTenant = section.Key("qos_max_size_per_tenant").MustInt(1000)
+	// Memberlist ring configuration for distributed search
+	// For Kubernetes Deployments, use DNS-based discovery with headless services:
+	//   memberlist_join_member = dnssrv+grafana-memberlist.namespace.svc:7946
+	// The dnssrv+ prefix triggers SRV record lookup for pod IPs.
 	cfg.MemberlistBindAddr = section.Key("memberlist_bind_addr").String()
 	cfg.MemberlistAdvertiseAddr = section.Key("memberlist_advertise_addr").String()
 	cfg.MemberlistAdvertisePort = section.Key("memberlist_advertise_port").MustInt(7946)
 	cfg.MemberlistJoinMember = section.Key("memberlist_join_member").String()
 	cfg.MemberlistClusterLabel = section.Key("memberlist_cluster_label").String()
 	cfg.MemberlistClusterLabelVerificationDisabled = section.Key("memberlist_cluster_label_verification_disabled").MustBool(false)
+	// SearchRingReplicationFactor configures replication factor of indexes across multiple instances.
+	// Recommended: 2 for production deployments using emptyDir volumes to provides availability during pod restarts/rebuilds.
 	cfg.SearchRingReplicationFactor = section.Key("search_ring_replication_factor").MustInt(1)
 	cfg.InstanceID = section.Key("instance_id").String()
 	cfg.IndexFileThreshold = section.Key("index_file_threshold").MustInt(10)

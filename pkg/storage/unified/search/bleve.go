@@ -93,11 +93,6 @@ type BleveOptions struct {
 	// This enables horizontal scaling for large namespaces (1M+ documents).
 	// Recommended: 64 for large scale deployments.
 	SubIndexCount int
-
-	// LargeFolderThreshold is the resource count above which folders get sub-sharded.
-	// When a folder has more than this many resources, additional sub-sharding is applied.
-	// 0 = disabled. Recommended: 10000.
-	LargeFolderThreshold int
 }
 
 type bleveBackend struct {

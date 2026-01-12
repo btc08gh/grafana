@@ -265,7 +265,7 @@ func (s *service) OwnsSubIndex(key resource.NamespacedResource, subIndexID int) 
 		}
 	}
 
-	rs, err := s.searchRing.GetWithOptions(ringHasher.Sum32(), searchOwnerRead, ring.WithReplicationFactor(s.searchRing.ReplicationFactor()))
+	rs, err := s.searchRing.GetWithOptions(ringHasher.Sum32(), searchOwnerRead)
 	if err != nil {
 		return false, fmt.Errorf("error getting replicaset from ring: %w", err)
 	}
