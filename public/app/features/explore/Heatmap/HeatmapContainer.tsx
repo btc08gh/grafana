@@ -1,5 +1,3 @@
-import { useMemo } from 'react';
-
 import {
   AbsoluteTimeRange,
   DataFrame,
@@ -14,12 +12,14 @@ import { PanelChrome, PanelChromeProps } from '@grafana/ui';
 
 import { HeatmapExploreContainer } from './HeatmapExploreContainer';
 
-const MAX_NUMBER_OF_HEATMAPS = 5;
+// Fixed height for each heatmap panel
+const HEATMAP_HEIGHT = 400;
 
 interface Props extends Pick<PanelChromeProps, 'statusMessage'> {
   width: number;
   height: number;
   data: DataFrame[];
+  annotations?: DataFrame[];
   eventBus: EventBus;
   timeRange: TimeRange;
   timeZone: TimeZone;
@@ -30,8 +30,8 @@ interface Props extends Pick<PanelChromeProps, 'statusMessage'> {
 
 export const HeatmapContainer = ({
   data,
+  annotations,
   eventBus,
-  height,
   width,
   timeRange,
   timeZone,
@@ -40,31 +40,34 @@ export const HeatmapContainer = ({
   loadingState,
   statusMessage,
 }: Props) => {
-  const slicedData = useMemo(() => {
-    return data.slice(0, MAX_NUMBER_OF_HEATMAPS);
-  }, [data]);
-
+  // Backend already respects query limit parameter, so render all frames
   return (
-    <PanelChrome
-      title={t('heatmap.container.title', 'Heatmap')}
-      width={width}
-      height={height}
-      loadingState={loadingState}
-      statusMessage={statusMessage}
-    >
-      {(innerWidth, innerHeight) => (
-        <HeatmapExploreContainer
-          data={slicedData}
-          height={innerHeight}
-          width={innerWidth}
-          timeRange={timeRange}
-          timeZone={timeZone}
-          onChangeTime={onChangeTime}
-          splitOpenFn={splitOpenFn}
+    <>
+      {data.map((frame, index) => (
+        <PanelChrome
+          key={frame.name || `heatmap-${index}`}
+          title={frame.name || t('heatmap.container.title', 'Heatmap')}
+          width={width}
+          height={HEATMAP_HEIGHT}
           loadingState={loadingState}
-          eventBus={eventBus}
-        />
-      )}
-    </PanelChrome>
+          statusMessage={statusMessage}
+        >
+          {(innerWidth, innerHeight) => (
+            <HeatmapExploreContainer
+              data={[frame]}
+              annotations={annotations}
+              height={innerHeight}
+              width={innerWidth}
+              timeRange={timeRange}
+              timeZone={timeZone}
+              onChangeTime={onChangeTime}
+              splitOpenFn={splitOpenFn}
+              loadingState={loadingState}
+              eventBus={eventBus}
+            />
+          )}
+        </PanelChrome>
+      ))}
+    </>
   );
 };

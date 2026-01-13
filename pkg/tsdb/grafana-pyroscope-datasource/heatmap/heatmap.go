@@ -1,6 +1,9 @@
 package heatmap
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/data"
@@ -13,6 +16,98 @@ type Point struct {
 	Counts    []int64
 }
 
+// generateFrameName creates a unique frame name from labels
+// If labels are empty, returns "heatmap"
+// Otherwise returns "heatmap{label1=value1,label2=value2,...}"
+func generateFrameName(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "heatmap"
+	}
+
+	// Sort label keys for consistent ordering
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Build label string
+	pairs := make([]string, 0, len(labels))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, labels[k]))
+	}
+
+	return fmt.Sprintf("heatmap{%s}", strings.Join(pairs, ","))
+}
+
+// fillMissingTimeSlices ensures continuous time coverage by filling gaps between data points.
+// This prevents visual gaps in the heatmap. Points are assumed to be in increasing timestamp order.
+func fillMissingTimeSlices(points []*Point, stepSeconds float64) []*Point {
+	if len(points) == 0 {
+		return points
+	}
+
+	// Determine the common bucket structure (YMin values)
+	// Find the most complete bucket structure across all points
+	templateYMin := points[0].YMin
+	for _, point := range points {
+		if len(point.YMin) > len(templateYMin) {
+			templateYMin = point.YMin
+		}
+	}
+
+	stepMs := int64(stepSeconds * 1000)
+	filled := make([]*Point, 0, len(points)*2) // Estimate: assume some gaps
+	zeroCounts := make([]int64, len(templateYMin))
+
+	// Process first point, normalizing bucket structure if needed
+	firstPoint := points[0]
+	if len(firstPoint.YMin) < len(templateYMin) {
+		paddedCounts := make([]int64, len(templateYMin))
+		copy(paddedCounts, firstPoint.Counts)
+		filled = append(filled, &Point{
+			Timestamp: firstPoint.Timestamp,
+			YMin:      templateYMin,
+			Counts:    paddedCounts,
+		})
+	} else {
+		filled = append(filled, firstPoint)
+	}
+
+	// Iterate through remaining points and fill gaps as we find them
+	for i := 1; i < len(points); i++ {
+		prevTimestamp := filled[len(filled)-1].Timestamp
+		currTimestamp := points[i].Timestamp
+
+		// Fill any gaps between previous and current point
+		expectedTimestamp := prevTimestamp + stepMs
+		for expectedTimestamp < currTimestamp {
+			filled = append(filled, &Point{
+				Timestamp: expectedTimestamp,
+				YMin:      templateYMin,
+				Counts:    append([]int64(nil), zeroCounts...), // Copy to avoid sharing
+			})
+			expectedTimestamp += stepMs
+		}
+
+		// Add current point, normalizing bucket structure if needed
+		currPoint := points[i]
+		if len(currPoint.YMin) < len(templateYMin) {
+			paddedCounts := make([]int64, len(templateYMin))
+			copy(paddedCounts, currPoint.Counts)
+			filled = append(filled, &Point{
+				Timestamp: currTimestamp,
+				YMin:      templateYMin,
+				Counts:    paddedCounts,
+			})
+		} else {
+			filled = append(filled, currPoint)
+		}
+	}
+
+	return filled
+}
+
 // CreateHeatmapFrame converts heatmap points to a DataFrame in HeatmapCells format
 // This creates a sparse representation where each cell is explicitly defined by:
 // - xMax: time value (timestamp)
@@ -20,8 +115,17 @@ type Point struct {
 // - yMax: bucket maximum value
 // - count: number of matches in that bucket
 // - yLayout: bucket layout (0 for linear buckets)
-func CreateHeatmapFrame(labels map[string]string, points []*Point, units string) *data.Frame {
-	frame := data.NewFrame("heatmap")
+//
+// Parameters:
+// - labels: metric labels for the heatmap series
+// - points: data points in increasing timestamp order (may have gaps in time coverage)
+// - units: unit string for Y-axis values
+// - stepSeconds: duration of each time bucket in seconds
+//
+// The function ensures continuous time coverage by filling gaps between points with zero counts.
+func CreateHeatmapFrame(labels map[string]string, points []*Point, units string, stepSeconds float64) *data.Frame {
+	frameName := generateFrameName(labels)
+	frame := data.NewFrame(frameName)
 	frame.Meta = &data.FrameMeta{
 		Type: "heatmap-cells",
 	}
@@ -32,20 +136,34 @@ func CreateHeatmapFrame(labels map[string]string, points []*Point, units string)
 		totalCells += len(point.Counts)
 	}
 
-	// Pre-allocate slices for better performance
-	xMaxValues := make([]time.Time, 0, totalCells)
-	yMinValues := make([]float64, 0, totalCells)
-	yMaxValues := make([]float64, 0, totalCells)
-	countValues := make([]int64, 0, totalCells)
-	yLayoutValues := make([]int8, 0, totalCells)
+	// Create data fields in the order expected by heatmap-cells format
+	// Set interval (in milliseconds) on xMax field so frontend can calculate xMin for bucket boundaries
+	intervalMs := int64(stepSeconds * 1000)
+	frame.Fields = data.Fields{
+		data.NewField("xMax", nil, make([]time.Time, 0, totalCells)).SetConfig(&data.FieldConfig{
+			Interval: float64(intervalMs),
+		}),
+		data.NewField("yMin", nil, make([]float64, 0, totalCells)).SetConfig(&data.FieldConfig{
+			Unit: units,
+		}),
+		data.NewField("yMax", nil, make([]float64, 0, totalCells)).SetConfig(&data.FieldConfig{
+			Unit: units,
+		}),
+		data.NewField("count", labels, make([]int64, 0, totalCells)),
+		data.NewField("yLayout", nil, make([]int8, 0, totalCells)),
+	}
+
+	if totalCells == 0 {
+		return frame
+	}
+
+	// Fill missing time slices and normalize bucket structures
+	points = fillMissingTimeSlices(points, stepSeconds)
 
 	// Populate cells: for each time point, create a cell for each bucket
 	for _, point := range points {
 		timestamp := time.UnixMilli(point.Timestamp)
 		for i := 0; i < len(point.Counts); i++ {
-			xMaxValues = append(xMaxValues, timestamp)
-			yMinValues = append(yMinValues, point.YMin[i])
-
 			// Calculate yMax: for bucket i, yMax is yMin of bucket i+1
 			// For the last bucket, use a large value or calculate based on bucket width
 			var yMax float64
@@ -61,23 +179,15 @@ func CreateHeatmapFrame(labels map[string]string, points []*Point, units string)
 					yMax = point.YMin[i] * 2
 				}
 			}
-			yMaxValues = append(yMaxValues, yMax)
-			countValues = append(countValues, point.Counts[i])
-			yLayoutValues = append(yLayoutValues, 0) // 0 indicates linear bucket layout
-		}
-	}
 
-	// Create data fields in the order expected by heatmap-cells format
-	frame.Fields = data.Fields{
-		data.NewField("xMax", nil, xMaxValues),
-		data.NewField("yMin", nil, yMinValues).SetConfig(&data.FieldConfig{
-			Unit: units,
-		}),
-		data.NewField("yMax", nil, yMaxValues).SetConfig(&data.FieldConfig{
-			Unit: units,
-		}),
-		data.NewField("count", labels, countValues),
-		data.NewField("yLayout", nil, yLayoutValues),
+			frame.AppendRow(
+				timestamp,
+				point.YMin[i],
+				yMax,
+				point.Counts[i],
+				int8(0), // 0 indicates linear bucket layout
+			)
+		}
 	}
 
 	return frame

@@ -662,7 +662,7 @@ func (f *FakeClient) GetSeries(ctx context.Context, profileTypeID, labelSelector
 	}, nil
 }
 
-func (f *FakeClient) GetHeatmap(ctx context.Context, profileTypeID, labelSelector string, start, end int64, groupBy []string, step float64, queryType querierv1.HeatmapQueryType) (*HeatmapResponse, error) {
+func (f *FakeClient) GetHeatmap(ctx context.Context, profileTypeID, labelSelector string, start, end int64, groupBy []string, step float64, queryType querierv1.HeatmapQueryType, limit *int64, includeExemplars bool) (*HeatmapResponse, error) {
 	return &HeatmapResponse{
 		Series: []*HeatmapSeries{
 			{

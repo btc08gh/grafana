@@ -417,6 +417,7 @@ export class Explore extends PureComponent<Props, ExploreState> {
       <ContentOutlineItem panelId="Heatmap" title={t('explore.explore.title-heatmap', 'Heatmap')} icon="fire">
         <HeatmapContainer
           data={queryResponse.heatmapFrames}
+          annotations={queryResponse.annotations}
           height={400}
           width={width}
           timeRange={queryResponse.timeRange}

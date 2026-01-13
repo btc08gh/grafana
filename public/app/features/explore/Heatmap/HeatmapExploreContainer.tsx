@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { createContext, useMemo } from 'react';
 
 import {
   AbsoluteTimeRange,
@@ -15,8 +15,12 @@ import { TooltipDisplayMode } from '@grafana/schema';
 
 import { useExploreDataLinkPostProcessor } from '../hooks/useExploreDataLinkPostProcessor';
 
+// Context to provide splitOpen function to components that need to manually construct explore links
+export const ExploreSplitOpenContext = createContext<{ splitOpen?: SplitOpen; timeRange?: TimeRange }>({});
+
 interface Props {
   data: DataFrame[];
+  annotations?: DataFrame[];
   height: number;
   width: number;
   timeRange: TimeRange;
@@ -29,6 +33,7 @@ interface Props {
 
 export function HeatmapExploreContainer({
   data,
+  annotations,
   height,
   width,
   timeZone,
@@ -55,26 +60,32 @@ export function HeatmapExploreContainer({
       legend: {
         show: true,
       },
+      exemplars: {
+        color: 'rgba(31, 120, 193, 0.7)', // Standard Grafana blue to match graph series
+      },
     }),
     []
   );
 
   return (
     <DataLinksContext.Provider value={{ dataLinkPostProcessor }}>
-      <PanelRenderer
-        data={{
-          series: data,
-          timeRange,
-          state: loadingState,
-        }}
-        pluginId="heatmap"
-        title=""
-        width={width}
-        height={height}
-        onChangeTimeRange={onChangeTime}
-        timeZone={timeZone}
-        options={panelOptions}
-      />
+      <ExploreSplitOpenContext.Provider value={{ splitOpen: splitOpenFn, timeRange }}>
+        <PanelRenderer
+          data={{
+            series: data,
+            annotations,
+            timeRange,
+            state: loadingState,
+          }}
+          pluginId="heatmap"
+          title=""
+          width={width}
+          height={height}
+          onChangeTimeRange={onChangeTime}
+          timeZone={timeZone}
+          options={panelOptions}
+        />
+      </ExploreSplitOpenContext.Provider>
     </DataLinksContext.Provider>
   );
 }

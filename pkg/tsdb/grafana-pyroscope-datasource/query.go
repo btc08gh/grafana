@@ -95,6 +95,10 @@ func (d *PyroscopeDatasource) query(ctx context.Context, pCtx backend.PluginCont
 					heatmapType = querierv1.HeatmapQueryType_HEATMAP_QUERY_TYPE_SPAN
 				}
 
+				// Check if exemplars should be included
+				includeExemplars := qm.IncludeExemplars && backend.GrafanaConfigFromContext(ctx).FeatureToggles().IsEnabled(exemplarsFeatureToggle)
+
+				stepDuration := math.Max(query.Interval.Seconds(), parsedInterval.Seconds())
 				heatmapResp, err := d.client.GetHeatmap(
 					gCtx,
 					profileTypeId,
@@ -102,8 +106,10 @@ func (d *PyroscopeDatasource) query(ctx context.Context, pCtx backend.PluginCont
 					query.TimeRange.From.UnixMilli(),
 					query.TimeRange.To.UnixMilli(),
 					qm.GroupBy,
-					math.Max(query.Interval.Seconds(), parsedInterval.Seconds()),
+					stepDuration,
 					heatmapType,
+					qm.Limit,
+					includeExemplars,
 				)
 				if err != nil {
 					span.RecordError(err)
@@ -114,22 +120,51 @@ func (d *PyroscopeDatasource) query(ctx context.Context, pCtx backend.PluginCont
 
 				responseMutex.Lock()
 				defer responseMutex.Unlock()
+
+				// Determine exemplar type based on heatmap type
+				exemplarType := exemplar.ExemplarTypeProfile
+				if heatmapType == querierv1.HeatmapQueryType_HEATMAP_QUERY_TYPE_SPAN {
+					exemplarType = exemplar.ExemplarTypeSpan
+				}
+
 				for _, series := range heatmapResp.Series {
 					labels := make(map[string]string)
 					for _, label := range series.Labels {
 						labels[label.Name] = label.Value
 					}
-					// Convert HeatmapPoint to heatmap.Point
+					// Convert HeatmapPoint to heatmap.Point and collect exemplars
 					points := make([]*heatmap.Point, len(series.Points))
+					exemplars := []*exemplar.Exemplar{}
 					for i, p := range series.Points {
 						points[i] = &heatmap.Point{
 							Timestamp: p.Timestamp,
 							YMin:      p.YMin,
 							Counts:    p.Counts,
 						}
+						// Collect exemplars from this point
+						for _, e := range p.Exemplars {
+							// Convert exemplar labels from slice to map
+							exemplarLabels := make(map[string]string)
+							for _, l := range e.Labels {
+								exemplarLabels[l.Name] = l.Value
+							}
+							exemplars = append(exemplars, &exemplar.Exemplar{
+								ProfileId: e.ProfileId,
+								SpanId:    e.SpanId,
+								Value:     float64(e.Value),
+								Timestamp: e.Timestamp,
+								Labels:    exemplarLabels,
+							})
+						}
 					}
-					heatmapFrame := heatmap.CreateHeatmapFrame(labels, points, heatmapResp.Units)
+					heatmapFrame := heatmap.CreateHeatmapFrame(labels, points, heatmapResp.Units, stepDuration)
 					response.Frames = append(response.Frames, heatmapFrame)
+
+					// Create exemplar frame if we have exemplars
+					if len(exemplars) > 0 {
+						exemplarFrame := exemplar.CreateExemplarFrame(labels, exemplars, exemplarType, heatmapResp.Units)
+						response.Frames = append(response.Frames, exemplarFrame)
+					}
 				}
 				return nil
 			}
@@ -604,10 +639,17 @@ func seriesToDataFrames(resp *SeriesResponse, withAnnotations bool, stepDuration
 				}
 			}
 			for _, e := range point.Exemplars {
+				// Convert exemplar labels from slice to map
+				exemplarLabels := make(map[string]string)
+				for _, l := range e.Labels {
+					exemplarLabels[l.Name] = l.Value
+				}
 				exemplars = append(exemplars, &exemplar.Exemplar{
-					Id:        e.Id,
+					ProfileId: e.ProfileId,
+					SpanId:    e.SpanId,
 					Value:     transformation(float64(e.Value)),
 					Timestamp: e.Timestamp,
+					Labels:    exemplarLabels,
 				})
 			}
 		}
@@ -616,7 +658,8 @@ func seriesToDataFrames(resp *SeriesResponse, withAnnotations bool, stepDuration
 		frames = append(frames, frame)
 
 		if len(exemplars) > 0 {
-			frame := exemplar.CreateExemplarFrame(labels, exemplars)
+			// Series queries always use individual profiles
+			frame := exemplar.CreateExemplarFrame(labels, exemplars, exemplar.ExemplarTypeProfile, displayUnit)
 			frames = append(frames, frame)
 		}
 	}

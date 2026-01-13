@@ -55,9 +55,11 @@ type Point struct {
 }
 
 type Exemplar struct {
-	Id        string
+	ProfileId string
+	SpanId    string
 	Value     uint64
 	Timestamp int64
+	Labels    []*LabelPair
 }
 
 type ProfileResponse struct {
@@ -75,6 +77,7 @@ type HeatmapPoint struct {
 	Timestamp int64
 	YMin      []float64
 	Counts    []int64
+	Exemplars []*Exemplar
 }
 
 type HeatmapSeries struct {
@@ -166,10 +169,20 @@ func (c *PyroscopeClient) GetSeries(ctx context.Context, profileTypeID string, l
 			if len(p.Exemplars) > 0 {
 				points[i].Exemplars = make([]*Exemplar, len(p.Exemplars))
 				for j, e := range p.Exemplars {
+					// Convert API labels to our LabelPair type
+					exemplarLabels := make([]*LabelPair, len(e.Labels))
+					for k, l := range e.Labels {
+						exemplarLabels[k] = &LabelPair{
+							Name:  l.Name,
+							Value: l.Value,
+						}
+					}
 					points[i].Exemplars[j] = &Exemplar{
-						Id:        e.ProfileId,
+						ProfileId: e.ProfileId,
+						SpanId:    e.SpanId,
 						Value:     e.Value,
 						Timestamp: e.Timestamp,
+						Labels:    exemplarLabels,
 					}
 				}
 			}
@@ -190,9 +203,20 @@ func (c *PyroscopeClient) GetSeries(ctx context.Context, profileTypeID string, l
 	}, nil
 }
 
-func (c *PyroscopeClient) GetHeatmap(ctx context.Context, profileTypeID string, labelSelector string, start int64, end int64, groupBy []string, step float64, queryType querierv1.HeatmapQueryType) (*HeatmapResponse, error) {
+func (c *PyroscopeClient) GetHeatmap(ctx context.Context, profileTypeID string, labelSelector string, start int64, end int64, groupBy []string, step float64, queryType querierv1.HeatmapQueryType, limit *int64, includeExemplars bool) (*HeatmapResponse, error) {
 	ctx, span := tracing.DefaultTracer().Start(ctx, "datasource.pyroscope.GetHeatmap", trace.WithAttributes(attribute.String("profileTypeID", profileTypeID), attribute.String("labelSelector", labelSelector)))
 	defer span.End()
+
+	// Determine exemplar type based on includeExemplars flag and query type
+	exemplarType := typesv1.ExemplarType_EXEMPLAR_TYPE_NONE
+	if includeExemplars {
+		switch queryType {
+		case querierv1.HeatmapQueryType_HEATMAP_QUERY_TYPE_SPAN:
+			exemplarType = typesv1.ExemplarType_EXEMPLAR_TYPE_SPAN
+		case querierv1.HeatmapQueryType_HEATMAP_QUERY_TYPE_INDIVIDUAL:
+			exemplarType = typesv1.ExemplarType_EXEMPLAR_TYPE_INDIVIDUAL
+		}
+	}
 
 	req := connect.NewRequest(&querierv1.SelectHeatmapRequest{
 		ProfileTypeID: profileTypeID,
@@ -202,6 +226,8 @@ func (c *PyroscopeClient) GetHeatmap(ctx context.Context, profileTypeID string, 
 		Step:          step,
 		GroupBy:       groupBy,
 		QueryType:     queryType,
+		Limit:         limit,
+		ExemplarType:  exemplarType,
 	})
 
 	resp, err := c.connectClient.SelectHeatmap(ctx, req)
@@ -228,10 +254,32 @@ func (c *PyroscopeClient) GetHeatmap(ctx context.Context, profileTypeID string, 
 			for k, c := range slot.Counts {
 				counts[k] = int64(c)
 			}
+
+			// Process exemplars if present
+			exemplars := make([]*Exemplar, len(slot.Exemplars))
+			for k, e := range slot.Exemplars {
+				// Convert API labels to our LabelPair type
+				exemplarLabels := make([]*LabelPair, len(e.Labels))
+				for i, l := range e.Labels {
+					exemplarLabels[i] = &LabelPair{
+						Name:  l.Name,
+						Value: l.Value,
+					}
+				}
+				exemplars[k] = &Exemplar{
+					ProfileId: e.ProfileId,
+					SpanId:    e.SpanId,
+					Value:     e.Value,
+					Timestamp: e.Timestamp,
+					Labels:    exemplarLabels,
+				}
+			}
+
 			points[j] = &HeatmapPoint{
 				Timestamp: slot.Timestamp,
 				YMin:      slot.YMin,
 				Counts:    counts,
+				Exemplars: exemplars,
 			}
 		}
 
