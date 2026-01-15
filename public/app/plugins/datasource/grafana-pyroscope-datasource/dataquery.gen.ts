@@ -40,6 +40,10 @@ export interface GrafanaPyroscopeDataQuery extends common.DataQuery {
    */
   maxNodes?: number;
   /**
+   * Specifies the query profile id selectors.
+   */
+  profileIdSelector?: Array<string>;
+  /**
    * Specifies the type of profile to query.
    */
   profileTypeId: string;
@@ -53,5 +57,6 @@ export const defaultGrafanaPyroscopeDataQuery: Partial<GrafanaPyroscopeDataQuery
   groupBy: [],
   includeExemplars: false,
   labelSelector: '{}',
+  profileIdSelector: [],
   spanSelector: [],
 };
