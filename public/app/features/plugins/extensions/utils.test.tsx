@@ -1661,7 +1661,7 @@ describe('Plugin Extensions / Utils', () => {
     };
 
     test('should return true if category is root', () => {
-      expect(isRootPluginExtension({ ...baseLink, category: 'root' })).toBe(true);
+      expect(isRootPluginExtension({ ...baseLink, category: '${root}' })).toBe(true);
     });
 
     test('should return false if category is not root', () => {
