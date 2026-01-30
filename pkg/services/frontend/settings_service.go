@@ -5,6 +5,7 @@ import (
 
 	"github.com/grafana/authlib/authn"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/rest"
 
 	settingservice "github.com/grafana/grafana/pkg/services/setting"
 	"github.com/grafana/grafana/pkg/setting"
@@ -18,6 +19,7 @@ import (
 //
 // [settings_service]
 // url =
+// tls_skip_verify = false
 //
 // Returns nil if not configured (this is not an error condition). Errors returned should
 // be considered critical.
@@ -28,6 +30,7 @@ func setupSettingsService(cfg *setting.Cfg, promRegister prometheus.Registerer) 
 		// If settings service URL is configured, return nil without error
 		return nil, nil
 	}
+	tlsSkipVerify := settingsSec.Key("tls_skip_verify").MustBool(false)
 
 	gRPCAuth := cfg.SectionWithEnvOverrides("grpc_client_authentication")
 	token := gRPCAuth.Key("token").String()
@@ -50,6 +53,9 @@ func setupSettingsService(cfg *setting.Cfg, promRegister prometheus.Registerer) 
 	settingsService, err := settingservice.New(settingservice.Config{
 		URL:                 settingsServiceURL,
 		TokenExchangeClient: tokenClient,
+		TLSClientConfig: rest.TLSClientConfig{
+			Insecure: tlsSkipVerify,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create settings service client: %w", err)
