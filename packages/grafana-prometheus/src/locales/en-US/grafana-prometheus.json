@@ -44,9 +44,6 @@
         "select-a-metric": "1. Select a metric",
         "series-limit": "Series limit"
       },
-      "prom-cheat-sheet": {
-        "prom-ql-cheat-sheet": "PromQL Cheat Sheet"
-      },
       "prom-exemplar-field": {
         "exemplars": "Exemplars",
         "tooltip-disable-query": "Disable query with exemplars",
@@ -59,6 +56,9 @@
         "min-step": "Min step",
         "query-type": "Query type",
         "tooltip-units-builtin-variables-example-interval-rateinterval": "Time units and built-in variables can be used here, for example: {{example1}}, {{example2}}, {{example3}}, {{example4}}, {{example5}}, {{example6}}, {{example7}} (Default if no unit is specified: {{default}})"
+      },
+      "prom-cheat-sheet": {
+        "prom-ql-cheat-sheet": "PromQL Cheat Sheet"
       },
       "prom-query-field": {
         "placeholder-enter-a-prom-ql-query": "Enter a PromQL query…"
@@ -232,7 +232,6 @@
         "documentation-absent-over-time": "Returns an empty vector if the range vector passed to it has any elements and a 1-element vector with the value 1 if the range vector passed to it has no elements.",
         "documentation-avg-over-time": "The average value of all points in the specified interval.",
         "documentation-ceil": "Rounds the sample values of all elements in `v` up to the nearest integer.",
-        "documentation-changes": "For each input time series, `changes(v range-vector)` returns the number of times its value has changed within the provided time range as an instant vector.",
         "documentation-clamp": "Clamps the sample values of all elements in `v` to have a lower limit of `min` and an upper limit of `max`.",
         "documentation-clamp-max": "Clamps the sample values of all elements in `v` to have an upper limit of `max`.",
         "documentation-clamp-min": "Clamps the sample values of all elements in `v` to have a lower limit of `min`.",
@@ -258,6 +257,7 @@
         "documentation-histogram-sum": "Returns the sum of observations stored in a native histogram.",
         "documentation-holt-winters": "Renamed as double_exponential_smoothing in prometheus v3.x. For prometheus versions equal and greater than v3.0 please use double_exponential_smoothing. \n\nProduces a smoothed value for time series based on the range in `v`. The lower the smoothing factor `sf`, the more importance is given to old data. The higher the trend factor `tf`, the more trends in the data is considered. Both `sf` and `tf` must be between 0 and 1.",
         "documentation-hour": "Returns the hour of the day for each of the given times in UTC. Returned values are from 0 to 23.",
+        "documentation-changes": "For each input time series, `changes(v range-vector)` returns the number of times its value has changed within the provided time range as an instant vector.",
         "documentation-idelta": "Calculates the difference between the last two samples in the range vector `v`, returning an instant vector with the given deltas and equivalent labels.",
         "documentation-increase": "Calculates the increase in the time series in the range vector. Breaks in monotonicity (such as counter resets due to target restarts) are automatically adjusted for. The increase is extrapolated to cover the full time range as specified in the range vector selector, so that it is possible to get a non-integer result even if a counter increases only by integer increments.",
         "documentation-info": "Returns latest details and metadata about a group of metrics, such as their labels and current values, without doing any calculations",

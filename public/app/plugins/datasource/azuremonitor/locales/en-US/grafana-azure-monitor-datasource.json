@@ -46,6 +46,11 @@
       "placeholder-symbol-client-secret": "configured",
       "reset-symbol-client-secret": "Reset"
     },
+    "azure-credentials-form": {
+      "description-authentication": "Choose the type of authentication to Azure services",
+      "label-authentication": "Authentication",
+      "title-authentication": "Authentication"
+    },
     "azure-cheat-sheet": {
       "aria-label-raw-query": "{{queryDisplayName}} raw query",
       "aria-label-use-query": "Use this query button",
@@ -60,11 +65,6 @@
     "azure-cheat-sheet-modal": {
       "aria-label-kick-start": "Kick start your query modal",
       "title-kick-start": "Kick start your query"
-    },
-    "azure-credentials-form": {
-      "description-authentication": "Choose the type of authentication to Azure services",
-      "label-authentication": "Authentication",
-      "title-authentication": "Authentication"
     },
     "basic-logs-toggle": {
       "aria-label-enable-basic-logs": "Basic Logs",

@@ -35,23 +35,6 @@
       "required-tenant-id": "Tenant ID is required"
     }
   },
-  "cheat-sheet": {
-    "condtional-macros": "Or build your own conditionals using these macros which just return the values:",
-    "example-time-group": "Example of group by and order by with {{timeGroupMacro}}:",
-    "fillvalue": "by setting fillvalue Grafana will fill in missing values according to the interval. fillvalue can be either a literal value, {{null}} or {{previous}}; {{previous}} will fill in the previous seen value or {{null}} if none has been seen yet",
-    "macros": "Macros:",
-    "optional": "Optional:",
-    "optional-tip": "return column named <i>{{columnName}}</i> to represent the series name.",
-    "optional-tip-2": "If multiple value columns are returned the {{columnName}} column is used as prefix.",
-    "optional-tip-3": "If no column named {{columnName}} is found the column name of the value column is used as series name",
-    "resultsets-time-sorted": "Resultsets of time series queries need to be sorted by time.",
-    "table": "Table:",
-    "table-tip": "return any set of columns",
-    "time-series": "Time series:",
-    "time-series-tip": "return column named time (in UTC), as a unix time stamp or any sql native date data type. You can use the macros below.",
-    "time-series-tip-2": "any other columns returned will be the time point values.",
-    "title": "MSSQL cheat sheet"
-  },
   "configuration": {
     "configuration-editor": {
       "body-user-permission": "The database user should only be granted {{permissionType}} permissions on the specified database and tables you want to query. Grafana does not validate that queries are safe so queries can contain any SQL statement. For example, statements like <3>{{example1}}</3> and <5>{{example2}}</5> would be executed. To protect against this we <7>highly</7> recommend you create a specific MS SQL user with restricted permissions. Check out the <10>Microsoft SQL Server Data Source Docs</10> for more information.",
@@ -124,5 +107,22 @@
       "required-credential-cache-path": "Credential cache path is required",
       "required-username": "Username is required"
     }
+  },
+  "cheat-sheet": {
+    "condtional-macros": "Or build your own conditionals using these macros which just return the values:",
+    "example-time-group": "Example of group by and order by with {{timeGroupMacro}}:",
+    "fillvalue": "by setting fillvalue Grafana will fill in missing values according to the interval. fillvalue can be either a literal value, {{null}} or {{previous}}; {{previous}} will fill in the previous seen value or {{null}} if none has been seen yet",
+    "macros": "Macros:",
+    "optional": "Optional:",
+    "optional-tip": "return column named <i>{{columnName}}</i> to represent the series name.",
+    "optional-tip-2": "If multiple value columns are returned the {{columnName}} column is used as prefix.",
+    "optional-tip-3": "If no column named {{columnName}} is found the column name of the value column is used as series name",
+    "resultsets-time-sorted": "Resultsets of time series queries need to be sorted by time.",
+    "table": "Table:",
+    "table-tip": "return any set of columns",
+    "time-series": "Time series:",
+    "time-series-tip": "return column named time (in UTC), as a unix time stamp or any sql native date data type. You can use the macros below.",
+    "time-series-tip-2": "any other columns returned will be the time point values.",
+    "title": "MSSQL cheat sheet"
   }
 }
