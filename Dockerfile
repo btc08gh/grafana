@@ -138,6 +138,9 @@ COPY .github .github
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 
+COPY packages/grafana-data/src/themes/themeDefinitions packages/grafana-data/src/themes/themeDefinitions
+RUN go generate ./pkg/services/preference
+
 RUN make build-go GO_BUILD_TAGS=${GO_BUILD_TAGS} WIRE_TAGS=${WIRE_TAGS}
 
 # From-tarball build stage
