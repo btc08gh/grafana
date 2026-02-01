@@ -24,6 +24,7 @@ const extraThemes: { [key: string]: unknown } = {
   aubergine,
   debug,
   desertbloom,
+  dracula,
   gildedgrove,
   gloom,
   mars,
