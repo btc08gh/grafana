@@ -1,0 +1,76 @@
+{
+  "name": "Dracula",
+  "id": "dracula",
+  "colors": {
+    "mode": "dark",
+    "border": {
+      "weak": "#343746",
+      "medium": "#44475a",
+      "strong": "#6272a4"
+    },
+    "text": {
+      "primary": "#f8f8f2",
+      "secondary": "#d7d7d1",
+      "disabled": "#6272a4",
+      "link": "#8be9fd",
+      "maxContrast": "#ffffff"
+    },
+    "primary": {
+      "main": "#bd93f9",
+      "text": "#d7bdfc",
+      "border": "#bd93f9",
+      "name": "primary",
+      "shade": "#d6b8ff",
+      "transparent": "#bd93f929",
+      "contrastText": "#282a36",
+      "borderTransparent": "#bd93f940"
+    },
+    "secondary": {
+      "main": "#44475a",
+      "shade": "#52556b",
+      "transparent": "rgba(248, 248, 242, 0.08)",
+      "text": "#f8f8f2",
+      "contrastText": "#f8f8f2",
+      "border": "rgba(248, 248, 242, 0.08)",
+      "name": "secondary",
+      "borderTransparent": "rgba(248, 248, 242, 0.25)"
+    },
+    "info": {
+      "main": "#8be9fd",
+      "text": "#f8f8f2",
+      "border": "#8be9fd"
+    },
+    "error": {
+      "main": "#ff5555"
+    },
+    "success": {
+      "main": "#50fa7b"
+    },
+    "warning": {
+      "main": "#ffb86c"
+    },
+    "background": {
+      "canvas": "#282a36",
+      "primary": "#21222c",
+      "secondary": "#2b2d3a",
+      "elevated": "#44475a"
+    },
+    "action": {
+      "hover": "#3b3e50",
+      "selected": "#44475a",
+      "selectedBorder": "#ff79c6",
+      "focus": "#3b3e50",
+      "hoverOpacity": 0.08,
+      "disabledText": "#6272a4",
+      "disabledBackground": "rgba(68, 71, 90, 0.2)",
+      "disabledOpacity": 0.38
+    },
+    "gradients": {
+      "brandHorizontal": "linear-gradient(270deg, #ff79c6 0%, #bd93f9 100%)",
+      "brandVertical": "linear-gradient(0deg, #ff79c6 0%, #bd93f9 100%)"
+    },
+    "contrastThreshold": 3,
+    "hoverFactor": 0.03,
+    "tonalOffset": 0.15
+  }
+}
